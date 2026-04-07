@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Sable (dev)</title>
+    <style>
+      body {
+        font-family: -apple-system, system-ui, sans-serif;
+        margin: 0;
+        padding: 12px;
+        width: 280px;
+      }
+      h1 {
+        font-size: 14px;
+        margin: 0 0 8px;
+      }
+      label {
+        display: block;
+        font-size: 11px;
+        color: #555;
+        margin-top: 8px;
+      }
+      input {
+        width: 100%;
+        padding: 5px 6px;
+        font: inherit;
+        box-sizing: border-box;
+      }
+      .row {
+        display: flex;
+        gap: 6px;
+        margin-top: 10px;
+      }
+      button {
+        flex: 1;
+        padding: 6px 8px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      #status {
+        margin-top: 10px;
+        font-size: 12px;
+        color: #555;
+        min-height: 1em;
+        word-break: break-word;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Sable (dev)</h1>
+    <form id="sable-form">
+      <label for="agent-id">Agent ID</label>
+      <input id="agent-id" type="text" placeholder="agt_..." required />
+
+      <label for="api-url">API URL</label>
+      <input id="api-url" type="text" />
+
+      <div class="row">
+        <button type="submit" id="start-btn">Start</button>
+        <button type="button" id="stop-btn">Stop</button>
+      </div>
+    </form>
+    <div id="status"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>

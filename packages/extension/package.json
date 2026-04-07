@@ -1,0 +1,20 @@
+{
+  "name": "@sable-ai/extension",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Sable Chrome MV3 extension (development build).",
+  "type": "module",
+  "scripts": {
+    "build": "bun run build:clean && bun run build:scripts && bun run build:assets && bun run build:sdk-copy",
+    "build:clean": "rm -rf dist && mkdir -p dist",
+    "build:scripts": "bun build src/background.ts src/popup.ts --outdir dist --target=browser",
+    "build:assets": "cp manifest.json dist/manifest.json && cp src/popup.html dist/popup.html",
+    "build:sdk-copy": "cp ../sdk/dist/sable.iife.js dist/sable.iife.js"
+  },
+  "dependencies": {
+    "@sable-ai/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.270"
+  }
+}
