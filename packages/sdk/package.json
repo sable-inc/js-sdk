@@ -1,6 +1,6 @@
 {
   "name": "@sable-ai/sdk",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Sable SDK — runtime that runs in the user's browser.",
   "type": "module",
   "main": "dist/sable.iife.js",
@@ -11,5 +11,8 @@
   "scripts": {
     "build": "bun build src/index.ts --outfile dist/sable.iife.js --format=iife",
     "test": "bun test"
+  },
+  "dependencies": {
+    "livekit-client": "^2.17.0"
   }
 }
