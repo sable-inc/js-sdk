@@ -3,66 +3,191 @@
 /**
  * Background service worker for @sable-ai/extension (dev build).
  *
- * Listens for {type: "inject"} messages from the popup and uses
- * chrome.scripting.executeScript to drop a <script src> tag into
- * the active tab that loads packages/sdk's IIFE bundle into the
- * page's main JS world.
+ * Handles two message types from the popup:
  *
- * Why a <script src> tag instead of `world: "MAIN"` directly:
- * `chrome.scripting.executeScript({ files: [...] })` runs files in
- * the extension's isolated world, not the page's main world. To
- * load a separate JS file into the main world we have to inject a
- * script tag whose src points at a web_accessible_resource. The
- * fetched script then executes in the page's own JS realm.
+ *   { type: "start", agentId, apiUrl } — idempotently inject the SDK
+ *     script tag into the active tab (main world via web_accessible_resources),
+ *     wait for `window.Sable` to appear, then call
+ *     `window.Sable.start({agentPublicId, apiUrl})` in the main world.
+ *
+ *   { type: "stop" } — call `window.Sable.stop()` in the main world if the
+ *     SDK is loaded. No-op otherwise.
+ *
+ * All "touch window.Sable" calls MUST pass world: "MAIN" to executeScript,
+ * otherwise they run in the isolated world where Sable is undefined.
  */
 
-interface InjectMessage {
-  type: "inject";
+interface StartMessage {
+  type: "start";
+  agentId: string;
+  apiUrl: string;
 }
 
-interface InjectResponse {
-  ok: boolean;
-  error?: string;
+interface StopMessage {
+  type: "stop";
+}
+
+type IncomingMessage = StartMessage | StopMessage;
+
+interface OkResponse {
+  ok: true;
+}
+interface ErrResponse {
+  ok: false;
+  error: string;
+}
+type BgResponse = OkResponse | ErrResponse;
+
+async function getActiveTabId(): Promise<number> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) {
+    throw new Error("no active tab");
+  }
+  return tab.id;
+}
+
+async function injectSdkTag(tabId: number): Promise<void> {
+  const sdkUrl = chrome.runtime.getURL("sable.iife.js");
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: (url: string) => {
+      const w = window as unknown as { Sable?: unknown };
+      if (w.Sable) return; // already injected, skip
+      const s = document.createElement("script");
+      s.src = url;
+      (document.head || document.documentElement).appendChild(s);
+    },
+    args: [sdkUrl],
+  });
+}
+
+async function waitForSable(tabId: number): Promise<void> {
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: () =>
+      new Promise<boolean>((resolve) => {
+        const deadline = Date.now() + 5000;
+        const tick = () => {
+          if ((window as unknown as { Sable?: unknown }).Sable) {
+            resolve(true);
+            return;
+          }
+          if (Date.now() > deadline) {
+            resolve(false);
+            return;
+          }
+          setTimeout(tick, 50);
+        };
+        tick();
+      }),
+  });
+  if (!result?.result) {
+    throw new Error("timed out waiting for window.Sable to load");
+  }
+}
+
+async function callStart(
+  tabId: number,
+  agentId: string,
+  apiUrl: string,
+): Promise<void> {
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: async (agentPublicId: string, apiUrl: string) => {
+      try {
+        await (
+          window as unknown as {
+            Sable: {
+              start(opts: {
+                agentPublicId: string;
+                apiUrl: string;
+              }): Promise<void>;
+            };
+          }
+        ).Sable.start({ agentPublicId, apiUrl });
+        return { ok: true as const };
+      } catch (e) {
+        return {
+          ok: false as const,
+          error: e instanceof Error ? e.message : String(e),
+        };
+      }
+    },
+    args: [agentId, apiUrl],
+  });
+  const r = result?.result as
+    | { ok: true }
+    | { ok: false; error: string }
+    | undefined;
+  if (!r) throw new Error("executeScript returned no result");
+  if (!r.ok) throw new Error(r.error);
+}
+
+async function callStop(tabId: number): Promise<void> {
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: async () => {
+      const w = window as unknown as { Sable?: { stop(): Promise<void> } };
+      if (!w.Sable) return { ok: true as const }; // nothing to stop
+      try {
+        await w.Sable.stop();
+        return { ok: true as const };
+      } catch (e) {
+        return {
+          ok: false as const,
+          error: e instanceof Error ? e.message : String(e),
+        };
+      }
+    },
+  });
+  const r = result?.result as
+    | { ok: true }
+    | { ok: false; error: string }
+    | undefined;
+  if (!r) throw new Error("executeScript returned no result");
+  if (!r.ok) throw new Error(r.error);
+}
+
+async function handleStart(msg: StartMessage): Promise<void> {
+  const tabId = await getActiveTabId();
+  await injectSdkTag(tabId);
+  await waitForSable(tabId);
+  await callStart(tabId, msg.agentId, msg.apiUrl);
+}
+
+async function handleStop(): Promise<void> {
+  const tabId = await getActiveTabId();
+  await callStop(tabId);
 }
 
 chrome.runtime.onMessage.addListener(
-  (msg: InjectMessage, _sender, sendResponse: (r: InjectResponse) => void) => {
-    if (msg?.type !== "inject") return;
-
-    void (async () => {
-      try {
-        const [tab] = await chrome.tabs.query({
-          active: true,
-          currentWindow: true,
-        });
-        if (!tab?.id) {
-          sendResponse({ ok: false, error: "no active tab" });
-          return;
-        }
-
-        const sdkUrl = chrome.runtime.getURL("sable.iife.js");
-
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: (url: string) => {
-            const s = document.createElement("script");
-            s.src = url;
-            s.onload = () => s.remove();
-            (document.head || document.documentElement).appendChild(s);
-          },
-          args: [sdkUrl],
-        });
-
-        sendResponse({ ok: true });
-      } catch (err) {
-        sendResponse({
-          ok: false,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    })();
-
-    // Return true to keep the message channel open for the async sendResponse.
-    return true;
+  (msg: IncomingMessage, _sender, sendResponse: (r: BgResponse) => void) => {
+    if (msg?.type === "start") {
+      handleStart(msg).then(
+        () => sendResponse({ ok: true }),
+        (err: unknown) =>
+          sendResponse({
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+      );
+      return true; // async response
+    }
+    if (msg?.type === "stop") {
+      handleStop().then(
+        () => sendResponse({ ok: true }),
+        (err: unknown) =>
+          sendResponse({
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+      );
+      return true; // async response
+    }
+    return false;
   },
 );
