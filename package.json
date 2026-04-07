@@ -1,5 +1,5 @@
 {
-  "name": "@sable/js-sdk",
+  "name": "@sable-ai/js-sdk",
   "private": true,
   "workspaces": ["packages/*"],
   "scripts": {
