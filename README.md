@@ -22,11 +22,37 @@ The rollout is phased:
 ### `@sable/sdk-ui`
 Call overlay UI: voice indicators, agent avatar, transcription, call controls, and the Sable button (embedded mode). Customizable to match customer branding. Overlays either the nickel video stream or the actual customer page.
 
-### `@sable/sdk-core` *(planned)*
+### `@sable-ai/sdk-core` — **shipped** ([npm](https://www.npmjs.com/package/@sable-ai/sdk-core))
 The agent's eyes and hands on the page:
 - **Wireframe capture**: DOM walker that classifies elements (buttons, inputs, text, images, nav) and renders wireframes to Canvas. ~126ms per capture, zero dependencies, pure Canvas API.
 - **DOM observation**: Reports structured page state (elements, positions, text, interactive components) to the agent. Hybrid approach — DOM state for speed, wireframes for visual context.
 - **Action execution**: Receives commands from the agent and executes native DOM actions (click, scroll, type, navigate). Same API whether running on nickel's browser or the user's browser.
+
+**Install** — either a script tag (recommended for no-build sites) or the npm package:
+
+```html
+<!-- Stripe.js-style split bundle: 533 B loader on page load, 150 KB core lazy-loaded on first Sable.start() -->
+<script src="https://sdk.withsable.com/v0.1.4/sable.js"></script>
+<script>
+  await window.Sable.start({ publicKey: "pk_live_...", vision: { enabled: true } });
+</script>
+```
+
+```bash
+bun add @sable-ai/sdk-core
+```
+
+CDN pins (all served from Cloudflare Pages at `sdk.withsable.com`):
+
+| URL | Cache | Use case |
+| --- | --- | --- |
+| `https://sdk.withsable.com/v0.1.4/sable.js` | 1 year, immutable | **Recommended for production** — exact version pin |
+| `https://sdk.withsable.com/v1/sable.js` | 1 hour | Latest 0.x — accepts patch releases automatically |
+| `https://sdk.withsable.com/latest/sable.js` | 5 minutes | Demos and smoke tests only |
+
+Each pin serves two files side-by-side: `sable.js` (the 533 B IIFE loader stub) and `sable-core.mjs` (the full SDK, livekit inlined). The loader captures its own script URL and dynamic-imports the core from the same path on the first `Sable.start()` call — so pages that never open a session pay only the loader cost.
+
+See [`packages/sdk-core/README.md`](packages/sdk-core/README.md) and [`infra/cdn/README.md`](infra/cdn/README.md) for details.
 
 ### `@sable/sdk-live` *(planned)*
 LiveKit connection — voice, audio, WebRTC peer connection, data channels. Extracted from parley as a standalone module. Common ground for all demo modes.
