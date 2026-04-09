@@ -59,8 +59,15 @@ jobs:
       - name: Setup Node (for npm publish)
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           registry-url: "https://registry.npmjs.org"
+
+      # npm trusted publishing (OIDC) requires npm >= 11.5.1, which is
+      # newer than what ships bundled with Node 22. Upgrade before publish
+      # so the CLI negotiates an OIDC token from the `id-token: write`
+      # permission instead of falling back to NODE_AUTH_TOKEN.
+      - name: Upgrade npm (for OIDC trusted publishing)
+        run: npm install -g npm@latest
 
       - name: Install workspace deps
         working-directory: .
