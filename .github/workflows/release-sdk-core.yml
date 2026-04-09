@@ -113,6 +113,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - name: Download dist artifact
         uses: actions/download-artifact@v4
         with:
@@ -124,16 +129,14 @@ jobs:
           VERSION="${GITHUB_REF_NAME#sdk-core-v}"
           ./infra/cdn/stage.sh "$VERSION"
 
-      # wrangler-action auto-detects the workspace package manager and picks
-      # bun when it sees `bun.lock` at the repo root. Without bun on PATH
-      # the action fails immediately with "Unable to locate executable file:
-      # bun". We force npm here instead — wrangler itself doesn't need any
-      # workspace deps (it's a self-contained CLI) and npm is always
-      # available on GitHub runners.
+      # We invoke wrangler directly via `bunx` instead of using
+      # `cloudflare/wrangler-action@v3`. That action shells out to
+      # `npm i wrangler` in the current working directory, which fails
+      # here because the repo root's package.json uses Bun workspace
+      # protocol (`workspace:*`) that npm refuses to parse. bunx sidesteps
+      # the repo's package manager entirely.
       - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          packageManager: npm
-          command: pages deploy infra/cdn/public --project-name=sable-sdk-cdn --branch=main
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: bunx wrangler@latest pages deploy infra/cdn/public --project-name=sable-sdk-cdn --branch=main
