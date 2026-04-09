@@ -1,0 +1,129 @@
+# Release @sable-ai/sdk-core to npm.
+#
+# Triggered by pushing a tag matching `sdk-core-v*` (e.g. `sdk-core-v0.0.3`).
+# The tag name is the source of truth — we verify it matches the version in
+# `packages/sdk-core/package.json` to prevent a mismatched release.
+#
+# Uses npm provenance (OIDC trusted publishing) so the package on npm is
+# cryptographically linked to this workflow run. Customers can verify where
+# the bytes came from via `npm view @sable-ai/sdk-core --json | jq .dist`.
+#
+# Prerequisites (one-time setup):
+#   1. npm: create an npm token with "automation" scope scoped to
+#      @sable-ai/sdk-core, add it as repo secret NPM_TOKEN.
+#      OR (preferred): configure OIDC trusted publisher on npmjs.com —
+#      https://docs.npmjs.com/trusted-publishers — then NPM_TOKEN is
+#      unnecessary and provenance is attached automatically.
+#   2. GitHub: enable "Read and write permissions" for GITHUB_TOKEN under
+#      Settings → Actions → General → Workflow permissions, so provenance
+#      attestations can be published.
+#
+# Release flow:
+#   1. Bump version in packages/sdk-core/package.json
+#   2. Commit: `chore(sdk-core): release v0.0.3`
+#   3. Tag: `git tag sdk-core-v0.0.3 && git push --tags`
+#   4. This workflow runs and publishes.
+
+name: Release @sable-ai/sdk-core
+
+on:
+  push:
+    tags:
+      - "sdk-core-v*"
+
+# Provenance requires `id-token: write`. `contents: read` is the default for
+# checkout. We don't need any other permission — the publish step talks to
+# npm, not to GitHub's package registry.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/sdk-core
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # Node is required so `npm publish` can talk to the registry with
+      # OIDC provenance. setup-node also wires `always-auth` + the registry
+      # URL so no `.npmrc` is needed.
+      - name: Setup Node (for npm publish)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install workspace deps
+        working-directory: .
+        run: bun install --frozen-lockfile
+
+      - name: Verify tag matches package version
+        run: |
+          TAG="${GITHUB_REF_NAME#sdk-core-v}"
+          PKG=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::tag $GITHUB_REF_NAME ($TAG) does not match package.json version ($PKG)"
+            exit 1
+          fi
+          echo "Releasing @sable-ai/sdk-core@$PKG"
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun test
+
+      - name: Build
+        run: bun run build
+
+      # `--provenance` attaches the OIDC attestation. Requires `id-token: write`
+      # and a trusted-publisher configured on npm (or an NPM_TOKEN with
+      # automation scope as fallback).
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdk-core-dist
+          path: packages/sdk-core/dist
+          retention-days: 30
+
+  # Deploy the IIFE bundle to sdk.withsable.com as a second job so a failure
+  # here doesn't roll back the npm publish (the two are independent; customers
+  # can always load the exact version from unpkg/jsDelivr as fallback).
+  deploy-cdn:
+    runs-on: ubuntu-latest
+    needs: publish
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sdk-core-dist
+          path: packages/sdk-core/dist
+
+      - name: Stage CDN layout
+        run: |
+          VERSION="${GITHUB_REF_NAME#sdk-core-v}"
+          ./infra/cdn/stage.sh "$VERSION"
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy infra/cdn/public --project-name=sable-sdk-cdn --branch=main

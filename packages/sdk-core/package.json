@@ -1,0 +1,61 @@
+{
+  "name": "@sable-ai/sdk-core",
+  "version": "0.1.0",
+  "description": "Sable SDK core — headless runtime (voice + vision + agent RPC) that runs in the user's browser.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": [
+    "./dist/sable.iife.js",
+    "./dist/esm/index.js"
+  ],
+  "main": "./dist/esm/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/types/index.d.ts",
+  "unpkg": "./dist/sable.iife.js",
+  "jsdelivr": "./dist/sable.iife.js",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "default": "./dist/esm/index.js"
+    },
+    "./iife": "./dist/sable.iife.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "bun run clean && bun run build:iife && bun run build:esm && bun run build:types",
+    "build:iife": "bun build src/index.ts --outfile dist/sable.iife.js --format=iife --minify",
+    "build:esm": "bun build src/index.ts --outdir dist/esm --format=esm --target=browser --external livekit-client",
+    "build:types": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "prepublishOnly": "bun run typecheck && bun test && bun run build"
+  },
+  "dependencies": {
+    "livekit-client": "^2.17.0"
+  },
+  "keywords": [
+    "sable",
+    "voice-agent",
+    "ai",
+    "webrtc",
+    "livekit",
+    "browser-automation"
+  ],
+  "homepage": "https://withsable.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sable-inc/js-sdk.git",
+    "directory": "packages/sdk-core"
+  }
+}

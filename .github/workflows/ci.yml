@@ -1,0 +1,42 @@
+# Per-PR CI for the js-sdk monorepo.
+#
+# Runs typecheck, tests, and a full build for @sable-ai/sdk-core on every
+# push to main and every pull request. The build step catches regressions
+# that don't surface in tsc (asset imports, bun-specific transforms) and
+# confirms the IIFE + ESM + types all still emit.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sdk-core:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/sdk-core
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install workspace deps
+        working-directory: .
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun test
+
+      - name: Build
+        run: bun run build

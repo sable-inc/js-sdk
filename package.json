@@ -1,0 +1,13 @@
+{
+  "name": "@sable-ai/js-sdk",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "test": "bun test",
+    "build": "bun run --filter '*' build"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  }
+}

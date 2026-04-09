@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Sable (dev)",
+  "version": "0.0.1",
+  "description": "Inject the Sable SDK into the current tab (development build).",
+  "permissions": [
+    "scripting",
+    "activeTab",
+    "storage",
+    "declarativeNetRequest",
+    "declarativeNetRequestWithHostAccess"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "strip_csp",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Sable (dev)"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["sable.iife.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

@@ -1,0 +1,678 @@
+// wireframe.js — ultra-fast DOM wireframe renderer
+// No dependencies needed
+
+class Wireframe {
+  constructor(root = document.body, opts = {}) {
+    this.root = root;
+    this.scale = opts.scale || 1;
+    this.quality = opts.quality || 0.8;
+    this.maxDepth = opts.maxDepth || 30;
+    this.minSize = opts.minSize || 0; // temporarily 0 to debug
+    this.showText = opts.showText !== false;
+    this.showImages = opts.showImages !== false;
+    // When true, image elements (<img> and background-image divs) are
+    // rendered as their actual pixels using a CORS-aware fetch cache.
+    // When false (default), they render as labeled placeholder boxes.
+    // Either way they ALWAYS get a label now — the old behaviour of
+    // drawing a mystery yellow box with no hint is gone.
+    this.images = opts.images === true;
+    // Class-level cache so it persists across captures. `null` entries are
+    // negative cache (CORS failure, 404, decode error) — don't retry.
+    if (!Wireframe._imageCache) Wireframe._imageCache = new Map();
+    if (!Wireframe._imagePending) Wireframe._imagePending = new Map();
+    this.colors = {
+      bg: '#ffffff',
+      block: '#e2e8f0',
+      blockStroke: '#94a3b8',
+      text: '#334155',
+      input: '#dbeafe',
+      inputStroke: '#3b82f6',
+      button: '#bfdbfe',
+      buttonStroke: '#2563eb',
+      image: '#fde68a',
+      imageStroke: '#f59e0b',
+      imageCross: '#d97706',
+      link: '#2563eb',
+      heading: '#0f172a',
+      nav: '#e0e7ff',
+      navStroke: '#6366f1',
+      ...(opts.colors || {}),
+    };
+  }
+
+  async capture() {
+    const t = performance.now();
+    const rootRect = this.root.getBoundingClientRect();
+    const scrollX = window.scrollX;
+    const scrollY = window.scrollY;
+
+    const canvasW = rootRect.width;
+    const canvasH = rootRect.height;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = canvasW * this.scale;
+    canvas.height = canvasH * this.scale;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(this.scale, this.scale);
+
+    // White background
+    ctx.fillStyle = this.colors.bg;
+    ctx.fillRect(0, 0, canvasW, canvasH);
+
+    // Two-pass: collect elements, draw boxes, then draw text on top
+    this._drawCount = 0;
+    this._skipCount = { tiny: 0, offscreen: 0, hidden: 0, depth: 0 };
+    this._elements = [];
+    this._pendingImageFetches = [];
+    this._collectElements(this.root, rootRect, 0);
+
+    // If image rendering is enabled and the first pass kicked off some
+    // fetches, give them a short window to land before drawing — that way
+    // the first captured frame already has some images instead of only
+    // placeholders. Subsequent frames hit the cache and are instant.
+    if (this.images && this._pendingImageFetches.length > 0) {
+      await Promise.race([
+        Promise.all(this._pendingImageFetches),
+        new Promise((r) => setTimeout(r, 400)),
+      ]);
+    }
+
+    // Pass 1: draw all boxes/shapes
+    for (const item of this._elements) {
+      this._drawElementBox(ctx, item);
+    }
+    // Pass 2: find ALL text nodes directly via TreeWalker and draw them
+    this._textCount = 0;
+    this._drawAllText(ctx, rootRect);
+
+    console.log(`[wireframe] drew ${this._drawCount} elements | skipped: ${JSON.stringify(this._skipCount)} | root: ${rootRect.width.toFixed(0)}x${rootRect.height.toFixed(0)}`);
+
+    const elapsed = performance.now() - t;
+    console.log(`[wireframe] captured: ${elapsed.toFixed(0)}ms | ${canvas.width}x${canvas.height}`);
+
+    return { canvas, elapsed };
+  }
+
+  _collectElements(el, rootRect, depth) {
+    if (depth > this.maxDepth) { this._skipCount.depth++; return; }
+
+    const children = el.children;
+
+    if (el.shadowRoot) {
+      this._collectElements(el.shadowRoot, rootRect, depth);
+    }
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      const rect = child.getBoundingClientRect();
+
+      if (rect.width < this.minSize || rect.height < this.minSize) { this._skipCount.tiny++; continue; }
+      if (rect.bottom < rootRect.top || rect.top > rootRect.bottom) { this._skipCount.offscreen++; continue; }
+      if (rect.right < rootRect.left || rect.left > rootRect.right) { this._skipCount.offscreen++; continue; }
+
+      const style = window.getComputedStyle(child);
+      if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') { this._skipCount.hidden++; continue; }
+
+      const x = rect.left - rootRect.left;
+      const y = rect.top - rootRect.top;
+      const w = rect.width;
+      const h = rect.height;
+      const tag = child.tagName;
+      const type = this._classifyElement(child, tag, style);
+
+      this._drawCount++;
+
+      // For image-like elements, capture a URL and a human label up front so
+      // the draw pass can either render the actual bitmap (opts.images=true
+      // + CORS-allowed fetch) or a labeled placeholder.
+      let url = null;
+      let label = null;
+      if (type === 'image' || (type === 'icon' && tag === 'IMG')) {
+        url = this._getImageUrl(child, style);
+        label = this._getImageLabel(child, url);
+        if (this.images && url) {
+          const p = this._ensureImage(url);
+          if (p && typeof p.then === 'function') {
+            this._pendingImageFetches.push(p);
+          }
+        }
+      }
+
+      this._elements.push({ type, x, y, w, h, el: child, style, tag, url, label });
+
+      this._collectElements(child, rootRect, depth + 1);
+    }
+  }
+
+  _classifyElement(el, tag, style) {
+    if (tag === 'VIDEO' || tag === 'CANVAS') return 'skip';
+    if (tag === 'IMG') return 'icon';
+    if (tag === 'SVG') return 'icon';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return 'input';
+    if (tag === 'BUTTON') return 'button';
+    if (el.getAttribute('role') === 'button') {
+      const bg = style.backgroundColor;
+      if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return 'button';
+    }
+    if (tag === 'A') return 'link';
+    if (tag === 'NAV' || el.getAttribute('role') === 'navigation') return 'nav';
+    if (/^H[1-6]$/.test(tag)) return 'heading';
+    if (tag === 'SPAN' || tag === 'P' || tag === 'LABEL' || tag === 'LI' || tag === 'TD' || tag === 'TH') return 'text';
+    if (style.backgroundImage && style.backgroundImage !== 'none') return 'image';
+    // Check if this element has direct text content (not just from children)
+    if (this._hasDirectText(el)) return 'text';
+    return 'block';
+  }
+
+  // Extract a label for an icon — accessibility first
+  _getIconLabel(el) {
+    // Walk up to find the nearest interactive ancestor (often has the label)
+    const interactive = el.closest('[role="button"], button, a, [role="link"], [aria-label]');
+
+    // 1. aria-label (self or nearest ancestor)
+    const ariaLabel = el.getAttribute('aria-label') || (interactive && interactive.getAttribute('aria-label'));
+    if (ariaLabel) return ariaLabel;
+
+    // 2. aria-labelledby (self or ancestor)
+    const labelledBy = el.getAttribute('aria-labelledby') || (interactive && interactive.getAttribute('aria-labelledby'));
+    if (labelledBy) {
+      const ref = document.getElementById(labelledBy);
+      if (ref) return ref.textContent.trim();
+    }
+
+    // 3. aria-describedby
+    const describedBy = el.getAttribute('aria-describedby') || (interactive && interactive.getAttribute('aria-describedby'));
+    if (describedBy) {
+      const ref = document.getElementById(describedBy);
+      if (ref) return ref.textContent.trim();
+    }
+
+    // 4. alt / title
+    if (el.getAttribute('alt')) return el.getAttribute('alt');
+    if (el.getAttribute('title')) return el.getAttribute('title');
+    if (interactive && interactive.getAttribute('title')) return interactive.getAttribute('title');
+
+    // 5. Visible text content of parent button
+    if (interactive && interactive !== el) {
+      const text = interactive.textContent?.trim();
+      if (text && text.length < 30) return text;
+    }
+
+    return '◆';
+
+    return '◆';
+  }
+
+  // Check if element has its own text nodes (not just inherited from children)
+  _hasDirectText(el) {
+    for (const node of el.childNodes) {
+      if (node.nodeType === 3 && node.textContent.trim().length > 0) return true;
+    }
+    return false;
+  }
+
+  // Resolve the image URL for an <img> or a background-image element.
+  _getImageUrl(el, style) {
+    if (el.tagName === 'IMG') {
+      return el.currentSrc || el.src || null;
+    }
+    const bg = style && style.backgroundImage;
+    if (bg && bg !== 'none') {
+      // backgroundImage may contain multiple layers: url(a), linear-gradient(...)
+      const m = bg.match(/url\(["']?([^"')]+)["']?\)/);
+      if (m) return m[1];
+    }
+    return null;
+  }
+
+  // Derive a human-readable label for an image element. Priority:
+  //   alt → aria-label → title → figcaption → nearest-ancestor aria-label
+  //   → nearest heading → decoded filename → "image"
+  _getImageLabel(el, url) {
+    const get = (attr) => {
+      try { return el.getAttribute && el.getAttribute(attr); } catch { return null; }
+    };
+    if (get('alt')) return get('alt');
+    if (get('aria-label')) return get('aria-label');
+    if (get('title')) return get('title');
+
+    const fig = el.closest && el.closest('figure');
+    if (fig) {
+      const cap = fig.querySelector && fig.querySelector('figcaption');
+      if (cap && cap.textContent) {
+        const t = cap.textContent.trim();
+        if (t) return t;
+      }
+    }
+
+    const labelledAncestor = el.closest && el.closest('[aria-label]');
+    if (labelledAncestor && labelledAncestor !== el) {
+      const a = labelledAncestor.getAttribute('aria-label');
+      if (a) return a;
+    }
+
+    // Notion cover images sit directly above the page H1 — use it as the
+    // label when we have nothing else, so the agent can say "your Notion
+    // page 'hello aidan' has a cover".
+    if (url) {
+      try {
+        const u = new URL(url, window.location.href);
+        const name = u.pathname.split('/').pop();
+        if (name) {
+          const decoded = decodeURIComponent(name).replace(/\.[a-z0-9]{2,5}$/i, '');
+          if (decoded && decoded.length < 60) return decoded;
+        }
+      } catch { /* ignore */ }
+    }
+
+    return 'image';
+  }
+
+  // Fetch → blob → ImageBitmap with CORS, class-level cache. Returns null
+  // (and negatively caches) on any failure. Concurrent callers for the
+  // same URL share one in-flight promise.
+  _ensureImage(url) {
+    const cache = Wireframe._imageCache;
+    const pending = Wireframe._imagePending;
+    if (cache.has(url)) return cache.get(url); // may be null
+    if (pending.has(url)) return pending.get(url);
+
+    const p = (async () => {
+      try {
+        const res = await fetch(url, { mode: 'cors', cache: 'force-cache' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        const bitmap = await createImageBitmap(blob);
+        cache.set(url, bitmap);
+        // LRU bound
+        if (cache.size > 50) {
+          const firstKey = cache.keys().next().value;
+          const evicted = cache.get(firstKey);
+          if (evicted && typeof evicted.close === 'function') {
+            try { evicted.close(); } catch { /* ignore */ }
+          }
+          cache.delete(firstKey);
+        }
+        return bitmap;
+      } catch (e) {
+        cache.set(url, null); // negative cache
+        return null;
+      } finally {
+        pending.delete(url);
+      }
+    })();
+    pending.set(url, p);
+    return p;
+  }
+
+  // Draw a labeled placeholder in the "yellow hatched box" style — used
+  // whenever opts.images is off or the fetch failed. The label is the key
+  // thing: the agent reads it off the frame and can reason about the
+  // image's purpose without seeing the pixels.
+  _drawImagePlaceholder(ctx, label, x, y, w, h, radius) {
+    ctx.fillStyle = this.colors.image;
+    this._roundRect(ctx, x, y, w, h, radius);
+    ctx.fill();
+    ctx.strokeStyle = this.colors.imageStroke;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    if (this.showImages && w > 20 && h > 20) {
+      ctx.strokeStyle = this.colors.imageCross;
+      ctx.lineWidth = 0.5;
+      ctx.beginPath();
+      ctx.moveTo(x + 4, y + 4);
+      ctx.lineTo(x + w - 4, y + h - 4);
+      ctx.moveTo(x + w - 4, y + 4);
+      ctx.lineTo(x + 4, y + h - 4);
+      ctx.stroke();
+    }
+    // The label band: a semi-transparent stripe across the middle of the
+    // placeholder with the text on top. Sized to remain legible at 1fps
+    // capture resolution while not dominating the frame.
+    if (label && w > 40 && h > 18) {
+      const fontSize = Math.min(Math.max(Math.floor(h * 0.18), 11), 18);
+      ctx.font = `600 ${fontSize}px -apple-system, system-ui, sans-serif`;
+      const pad = 6;
+      const bandH = fontSize + pad * 2;
+      const bandY = y + (h - bandH) / 2;
+      // Truncate label to fit
+      let display = label;
+      const maxW = w - pad * 4;
+      while (ctx.measureText(display).width > maxW && display.length > 1) {
+        display = display.slice(0, -2) + '…';
+      }
+      const textW = ctx.measureText(display).width;
+      const bandW = Math.min(textW + pad * 2, w - 8);
+      const bandX = x + (w - bandW) / 2;
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+      ctx.fillRect(bandX, bandY, bandW, bandH);
+      ctx.fillStyle = '#ffffff';
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'center';
+      ctx.fillText(display, x + w / 2, bandY + bandH / 2);
+      ctx.textAlign = 'start';
+    }
+  }
+
+  // Draw an actual raster image (from the cache) into the given rect.
+  // Clips to the element's rounded-rect so the image respects border-radius.
+  _drawImageBitmap(ctx, bitmap, x, y, w, h, radius) {
+    try {
+      ctx.save();
+      this._roundRect(ctx, x, y, w, h, radius);
+      ctx.clip();
+      ctx.drawImage(bitmap, x, y, w, h);
+      ctx.restore();
+      ctx.strokeStyle = this.colors.imageStroke;
+      ctx.lineWidth = 0.5;
+      this._roundRect(ctx, x, y, w, h, radius);
+      ctx.stroke();
+      return true;
+    } catch (e) {
+      try { ctx.restore(); } catch { /* ignore */ }
+      return false;
+    }
+  }
+
+  _drawElementBox(ctx, { type, x, y, w, h, el, style, url, label }) {
+    const radius = Math.min(parseFloat(style.borderRadius) || 0, w / 2, h / 2, 8);
+
+    switch (type) {
+      case 'skip':
+        return; // don't draw images/video/canvas at all
+
+      case 'image': {
+        // Try the cached bitmap first. If opts.images is off, `url` may be
+        // set but the cache won't have it → falls through to placeholder.
+        const cached = url ? Wireframe._imageCache.get(url) : null;
+        if (cached && this._drawImageBitmap(ctx, cached, x, y, w, h, radius)) {
+          break;
+        }
+        this._drawImagePlaceholder(ctx, label || 'image', x, y, w, h, radius);
+        break;
+      }
+
+      case 'icon': {
+        // Large <img> tags are photos/avatars — render as real images if we
+        // can, with a labeled placeholder fallback. Small <img> and <svg>
+        // keep the tight "icon label" treatment.
+        const isBigImg = el && el.tagName === 'IMG' && w >= 48 && h >= 48;
+        if (isBigImg) {
+          const cached = url ? Wireframe._imageCache.get(url) : null;
+          if (cached && this._drawImageBitmap(ctx, cached, x, y, w, h, radius)) {
+            break;
+          }
+          this._drawImagePlaceholder(ctx, label || 'image', x, y, w, h, radius);
+          break;
+        }
+
+        const iconLabel = label || this._getIconLabel(el);
+
+        ctx.fillStyle = '#f1f5f9';
+        this._roundRect(ctx, x, y, w, h, 3);
+        ctx.fill();
+        ctx.strokeStyle = '#94a3b8';
+        ctx.lineWidth = 0.5;
+        ctx.stroke();
+
+        if (iconLabel && w >= 10 && h >= 8) {
+          const fontSize = Math.min(Math.max(h * 0.55, 7), 11);
+          ctx.fillStyle = '#64748b';
+          ctx.font = `${fontSize}px -apple-system, sans-serif`;
+          ctx.textBaseline = 'middle';
+          ctx.textAlign = 'center';
+          const display = iconLabel.length > 6 ? iconLabel.slice(0, 5) + '…' : iconLabel;
+          ctx.fillText(display, x + w / 2, y + h / 2);
+          ctx.textAlign = 'start';
+        }
+        break;
+      }
+
+      case 'input':
+        ctx.fillStyle = this.colors.input;
+        this._roundRect(ctx, x, y, w, h, radius);
+        ctx.fill();
+        ctx.strokeStyle = this.colors.inputStroke;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        break;
+
+      case 'button': {
+        // Use actual background color if it has one
+        const btnBg = style.backgroundColor;
+        if (btnBg && btnBg !== 'rgba(0, 0, 0, 0)' && btnBg !== 'transparent') {
+          ctx.fillStyle = btnBg;
+        } else {
+          ctx.fillStyle = this.colors.button;
+        }
+        this._roundRect(ctx, x, y, w, h, radius);
+        ctx.fill();
+        ctx.strokeStyle = this.colors.buttonStroke;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        break;
+      }
+
+      case 'text':
+        // Text elements don't need a box — just drawn in text pass
+        break;
+
+      case 'nav':
+        ctx.fillStyle = this.colors.nav;
+        this._roundRect(ctx, x, y, w, h, radius);
+        ctx.fill();
+        ctx.strokeStyle = this.colors.navStroke;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        break;
+
+      case 'block':
+      default:
+        ctx.strokeStyle = this.colors.blockStroke;
+        ctx.lineWidth = 0.5;
+        this._roundRect(ctx, x, y, w, h, radius);
+        ctx.stroke();
+
+        const hasBg = style.backgroundColor && style.backgroundColor !== 'rgba(0, 0, 0, 0)' && style.backgroundColor !== 'transparent';
+        if (hasBg) {
+          ctx.fillStyle = this.colors.block;
+          ctx.globalAlpha = 0.3;
+          this._roundRect(ctx, x, y, w, h, radius);
+          ctx.fill();
+          ctx.globalAlpha = 1;
+        }
+        break;
+    }
+  }
+
+  // Use TreeWalker to find ALL visible text nodes, regardless of nesting depth
+  _drawAllText(ctx, rootRect) {
+    if (!this.showText) return;
+    this._drawTextInRoot(ctx, rootRect, this.root);
+  }
+
+  _drawTextInRoot(ctx, rootRect, root) {
+    // Also handle shadow DOM roots
+    const els = root.querySelectorAll('*');
+    for (const el of els) {
+      if (el.shadowRoot) {
+        this._collectElements(el.shadowRoot, rootRect, 0);
+        this._drawTextInRoot(ctx, rootRect, el.shadowRoot);
+      }
+    }
+
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) => {
+        const text = node.textContent.trim();
+        if (!text) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+
+    while (walker.nextNode()) {
+      const textNode = walker.currentNode;
+      const text = textNode.textContent.trim();
+      if (!text) continue;
+
+      // Get the parent element for positioning and style
+      const parent = textNode.parentElement;
+      if (!parent) continue;
+
+      // Use Range to get exact bounding rect of the text node
+      const range = document.createRange();
+      range.selectNodeContents(textNode);
+      const rects = range.getClientRects();
+      if (rects.length === 0) continue;
+
+      const style = window.getComputedStyle(parent);
+      if (style.visibility === 'hidden' || style.opacity === '0') continue;
+
+      // Draw text at each rect (text can wrap across lines)
+      for (const rect of rects) {
+        if (rect.width < 4 || rect.height < 4) continue;
+        if (rect.bottom < rootRect.top || rect.top > rootRect.bottom) continue;
+
+        const x = rect.left - rootRect.left;
+        const y = rect.top - rootRect.top;
+        const w = rect.width;
+        const h = rect.height;
+
+        const fontSize = Math.min(Math.max(parseFloat(style.fontSize) || 11, 9), 24);
+        const bold = parseInt(style.fontWeight) >= 600;
+        const isLink = parent.closest('a') !== null;
+        const isButton = parent.closest('button, [role="button"]') !== null;
+
+        // Detect if text is on a colored background (like blue "New" button)
+        let color = this.colors.text;
+        if (isLink) {
+          color = this.colors.link;
+        } else if (isButton) {
+          // Check if parent or ancestor button has a colored bg
+          const btn = parent.closest('button, [role="button"]');
+          if (btn) {
+            const btnStyle = window.getComputedStyle(btn);
+            const bg = btnStyle.backgroundColor;
+            if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') {
+              // Dark background → white text
+              const isDarkBg = this._isDarkColor(bg);
+              color = isDarkBg ? '#ffffff' : this.colors.text;
+            }
+          }
+        }
+
+        this._drawText(ctx, text, x, y, w, h, color, fontSize, 'left', isLink, bold);
+        this._textCount++;
+      }
+    }
+    console.log(`[wireframe] drew ${this._textCount} text nodes`);
+  }
+
+  // Parse rgb/rgba string and check if it's dark
+  _isDarkColor(colorStr) {
+    const match = colorStr.match(/\d+/g);
+    if (!match || match.length < 3) return false;
+    const [r, g, b] = match.map(Number);
+    // Luminance formula
+    return (r * 0.299 + g * 0.587 + b * 0.114) < 128;
+  }
+
+  _drawText(ctx, text, x, y, w, h, color, fontSize = 11, align = 'left', underline = false, bold = false) {
+    if (w < 10 || h < 8) return;
+
+    ctx.fillStyle = color;
+    ctx.font = `${bold ? 'bold ' : ''}${fontSize}px -apple-system, sans-serif`;
+    ctx.textBaseline = 'middle';
+
+    // Truncate text to fit
+    let display = text;
+    while (ctx.measureText(display).width > w && display.length > 1) {
+      display = display.slice(0, -2) + '…';
+    }
+
+    const textY = y + h / 2;
+    let textX = x;
+    if (align === 'center') {
+      textX = x + (w - ctx.measureText(display).width) / 2;
+    }
+
+    ctx.fillText(display, textX, textY);
+
+    if (underline) {
+      const textW = ctx.measureText(display).width;
+      ctx.beginPath();
+      ctx.moveTo(textX, textY + fontSize / 2);
+      ctx.lineTo(textX + textW, textY + fontSize / 2);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 0.5;
+      ctx.stroke();
+    }
+  }
+
+  _roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  // --- Export ---
+  async download(filename) {
+    const { canvas } = await this.capture();
+    canvas.toBlob(b => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(b);
+      a.download = filename || `wireframe-${Date.now()}.png`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }, 'image/png');
+  }
+
+  async toDataURL() {
+    const { canvas } = await this.capture();
+    return canvas.toDataURL('image/png');
+  }
+
+  async toBlob() {
+    const { canvas } = await this.capture();
+    return new Promise(r => canvas.toBlob(r, 'image/png'));
+  }
+}
+
+// --- Quick API ---
+async function wireframe(el = document.body, opts = {}) {
+  const w = new Wireframe(el, opts);
+  return w.capture();
+}
+
+async function demo() {
+  const w = new Wireframe(document.body, { scale: 1 });
+
+  // Benchmark
+  const runs = 5;
+  const times = [];
+  for (let i = 0; i < runs; i++) {
+    const { elapsed } = await w.capture();
+    times.push(elapsed);
+  }
+  const avg = times.reduce((a, b) => a + b) / times.length;
+  console.log(`\n=== WIREFRAME BENCHMARK ===`);
+  console.log(`Runs: ${times.map(t => t.toFixed(0) + 'ms').join(', ')}`);
+  console.log(`Avg: ${avg.toFixed(0)}ms`);
+
+  // Download
+  await w.download();
+
+  window.__wireframe = w;
+  return w;
+}
+
+console.log('Wireframe ready! No dependencies needed.');
+console.log('  await demo()                          — benchmark + download');
+console.log('  await new Wireframe().download()      — quick download');
+console.log('  await new Wireframe().toDataURL()     — base64 for LLM');

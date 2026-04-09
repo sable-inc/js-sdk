@@ -2,3 +2,5 @@ node_modules/
 dist/
 .wrangler/
 *.tsbuildinfo
+docs/superpowers/
+infra/cdn/public/

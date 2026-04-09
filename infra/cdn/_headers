@@ -1,0 +1,37 @@
+# Cloudflare Pages custom headers for sdk.withsable.com
+#
+# Docs: https://developers.cloudflare.com/pages/configuration/headers/
+#
+# We serve one file (sable.js) under three path conventions:
+#
+#   /v0.1.0/sable.js   — exact-pinned, IMMUTABLE cache. Safe to cache for a
+#                         year because publishing a new version creates a new
+#                         path, not a new file at the same path.
+#
+#   /v1/sable.js        — latest 0.x MINOR pin. Safe to cache for ~1 hour —
+#                         short enough to propagate a patch release quickly,
+#                         long enough to absorb traffic spikes. No `immutable`.
+#
+#   /latest/sable.js    — always newest. 5-minute edge cache. Strongly
+#                         discouraged for production (docs warn) but useful
+#                         for demos and smoke tests.
+#
+# CORS is permissive (`*`) because the SDK is explicitly script-tag-friendly:
+# customers embed it on any origin and the auth boundary is the publishable
+# key's allowed-domains list, not the CDN's CORS headers.
+
+/*
+  Access-Control-Allow-Origin: *
+  Access-Control-Allow-Methods: GET, HEAD, OPTIONS
+  Cross-Origin-Resource-Policy: cross-origin
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+
+/v0.*/sable.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/v1/sable.js
+  Cache-Control: public, max-age=3600, s-maxage=3600
+
+/latest/sable.js
+  Cache-Control: public, max-age=300, s-maxage=300

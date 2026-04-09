@@ -1,0 +1,764 @@
+        () => {
+          const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+          const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+          const sx = window.scrollX || window.pageXOffset || 0;
+          const sy = window.scrollY || window.pageYOffset || 0;
+
+          const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+          const norm = (s) => (s || "").trim().replace(/\s+/g, " ");
+          const SKIP_TAGS = new Set(["script","style","noscript","template"]);
+          const WRAPPER_TAGS = new Set(["div","span","section","article","main","nav","header","footer"]);
+
+          const styleCache = new WeakMap();
+          const getStyleBits = (el) => {
+            const cached = styleCache.get(el);
+            if (cached) return cached;
+            let cs;
+            try { cs = window.getComputedStyle(el); } catch { cs = null; }
+            const bits = cs ? {
+              display: cs.display || "",
+              visibility: cs.visibility || "",
+              opacity: cs.opacity || "1",
+            } : { display: "", visibility: "", opacity: "1" };
+            styleCache.set(el, bits);
+            return bits;
+          };
+
+          // Cache for getBoundingClientRect - avoids redundant layout calls
+          const rectCache = new WeakMap();
+          const getCachedRect = (el) => {
+            const cached = rectCache.get(el);
+            if (cached !== undefined) return cached;
+            let r;
+            try { r = el.getBoundingClientRect(); } catch { r = null; }
+            rectCache.set(el, r);
+            return r;
+          };
+
+          // Cache for isControlLike - called multiple times per element
+          const controlCache = new WeakMap();
+
+          const isSkippableTag = (el) => {
+            const tag = (el.tagName || "").toLowerCase();
+            return !tag || SKIP_TAGS.has(tag);
+          };
+
+          const intersectViewport = (r) => {
+            const left = clamp(r.left, 0, vw);
+            const right = clamp(r.right, 0, vw);
+            const top = clamp(r.top, 0, vh);
+            const bottom = clamp(r.bottom, 0, vh);
+            const w = Math.max(0, right - left);
+            const h = Math.max(0, bottom - top);
+            return { x: left, y: top, width: w, height: h };
+          };
+
+          const roleOf = (el) => el.getAttribute?.("role") || null;
+
+          const directText = (el) => {
+            try {
+              let out = "";
+              for (const n of el.childNodes || []) {
+                if (n && n.nodeType === 3) {
+                  const t = norm(n.textContent);
+                  if (t) out += (out ? " " : "") + t;
+                }
+              }
+              return out;
+            } catch { return ""; }
+          };
+          const descendantText = (el, maxLen = 80) => {
+            try {
+              let t = norm(el.innerText || el.textContent || "");
+              if (!t) return "";
+              if (t.length > maxLen) t = t.slice(0, maxLen) + "…";
+              return t;
+            } catch { return ""; }
+          };
+
+          const isMedia = (el) => {
+            const tag = (el.tagName || "").toLowerCase();
+            return tag === "svg" || tag === "img" || tag === "canvas" || tag === "video";
+          };
+
+          const isControlLike = (el) => {
+            const cached = controlCache.get(el);
+            if (cached !== undefined) return cached;
+
+            const tag = (el.tagName || "").toLowerCase();
+            if (tag === "input" || tag === "textarea" || tag === "select" || tag === "button") {
+              controlCache.set(el, true); return true;
+            }
+            if (tag === "a") {
+              // treat as interactive even if Gatsby/JS navigation omits href
+              const href = (el.getAttribute("href") || "").trim();
+              if (href) { controlCache.set(el, true); return true; }
+              const role = (roleOf(el) || "").toLowerCase();
+              if (role === "link" || role === "button") { controlCache.set(el, true); return true; }
+            }
+            if (el.isContentEditable) { controlCache.set(el, true); return true; }
+
+            const role = roleOf(el);
+            if (role) {
+              const r = role.toLowerCase();
+              if ([
+                "textbox","searchbox","combobox","listbox","option",
+                "button","link","checkbox","radio","switch",
+                "tab","menuitem","slider","spinbutton"
+              ].includes(r)) { controlCache.set(el, true); return true; }
+            }
+
+            const tabindex = el.getAttribute?.("tabindex");
+            if (tabindex !== null && tabindex !== "-1") { controlCache.set(el, true); return true; }
+            if (el.hasAttribute?.("onclick")) { controlCache.set(el, true); return true; }
+            if (typeof el.onclick === "function") { controlCache.set(el, true); return true; }
+
+            // common misuse: clickable divs/spans with pointer cursor
+            try {
+              const cs = window.getComputedStyle(el);
+              if (cs && cs.cursor === "pointer") { controlCache.set(el, true); return true; }
+            } catch {}
+            controlCache.set(el, false);
+            return false;
+          };
+
+          const hasOwnLabeling = (el) => {
+            if (directText(el)) return true;
+            const a = norm(el.getAttribute?.("aria-label"));
+            const t = norm(el.getAttribute?.("title"));
+            const alt = norm(el.getAttribute?.("alt"));
+            const ph = norm(el.getAttribute?.("placeholder"));
+            if (a || t || alt || ph) return true;
+            const cls = norm(el.getAttribute?.("class"));
+            if (cls) return true;
+            return false;
+          };
+
+          const isImportant = (el) => {
+            if (isControlLike(el)) return true;
+            if (isMedia(el)) return true;
+            if (roleOf(el)) return true;
+            if (hasOwnLabeling(el)) return true;
+            return false;
+          };
+
+          const cssEscape = (s) => {
+            if (window.CSS && typeof window.CSS.escape === "function") return window.CSS.escape(s);
+            return s.replace(/[^a-zA-Z0-9_\-]/g, (c) => "\\" + c);
+          };
+
+          const domPath = (el) => {
+            const parts = [];
+            let cur = el;
+            while (cur && cur.nodeType === 1) {
+              const tag = cur.tagName.toLowerCase();
+              const id = cur.getAttribute?.("id");
+              // IDs are unique by HTML spec; skip querySelectorAll validation for speed
+              if (id) { parts.push("#" + cssEscape(id)); break; }
+              let nth = 1;
+              let sib = cur;
+              while ((sib = sib.previousElementSibling)) {
+                if (sib.tagName.toLowerCase() === tag) nth++;
+              }
+              parts.push(`${tag}:nth-of-type(${nth})`);
+              cur = cur.parentElement;
+              if (parts.length >= 12) break;
+            }
+            return parts.reverse().join(" > ");
+          };
+
+          const attrsOf = (el) => ({
+            "id": el.getAttribute?.("id") || null,
+            "class": el.getAttribute?.("class") || null,
+            "href": el.getAttribute?.("href") || null,
+            "type": el.getAttribute?.("type") || null,
+            "name": el.getAttribute?.("name") || null,
+            "placeholder": el.getAttribute?.("placeholder") || null,
+            "aria-label": el.getAttribute?.("aria-label") || null,
+            "aria-labelledby": el.getAttribute?.("aria-labelledby") || null,
+            "aria-expanded": el.getAttribute?.("aria-expanded") || null,
+            "aria-haspopup": el.getAttribute?.("aria-haspopup") || null,
+            "title": el.getAttribute?.("title") || null,
+            "alt": el.getAttribute?.("alt") || null,
+            "tabindex": el.getAttribute?.("tabindex") || null,
+            "contenteditable": el.isContentEditable ? "true" : (el.getAttribute?.("contenteditable") || null),
+          });
+
+          const svgDescriptor = (svg) => {
+            try {
+              if (!svg || (svg.tagName || "").toLowerCase() !== "svg") return "";
+              const viewBox = norm(svg.getAttribute("viewBox"));
+              const w = norm(svg.getAttribute("width"));
+              const h = norm(svg.getAttribute("height"));
+              const fill = norm(svg.getAttribute("fill"));
+              const stroke = norm(svg.getAttribute("stroke"));
+              const sw = norm(svg.getAttribute("stroke-width"));
+
+              const title = norm(svg.querySelector?.("title")?.textContent);
+
+              const cls = norm(svg.getAttribute("class"));
+              const useHref = norm(svg.querySelector?.("use")?.getAttribute("href") || svg.querySelector?.("use")?.getAttribute("xlink:href"));
+
+              const paths = svg.querySelectorAll?.("path") || [];
+              const pathCount = paths.length;
+
+              let dHash = "";
+              if (pathCount > 0) {
+                const d = paths[0].getAttribute("d") || "";
+                let hsh = 0;
+                for (let i = 0; i < d.length; i++) hsh = ((hsh << 5) - hsh + d.charCodeAt(i)) | 0;
+                dHash = String(hsh);
+              }
+
+              const parts = [];
+              if (title) parts.push(`title=${title}`);
+              if (useHref) parts.push(`use=${useHref}`);
+              if (viewBox) parts.push(`vb=${viewBox}`);
+              if (w || h) parts.push(`wh=${w||"?"}x${h||"?"}`);
+              if (stroke || sw) parts.push(`stroke=${stroke||""}:${sw||""}`);
+              if (fill) parts.push(`fill=${fill}`);
+              if (cls) parts.push(`cls=${cls.split(/\s+/).slice(0,3).join(".")}`);
+              if (pathCount) parts.push(`paths=${pathCount}`);
+              if (dHash) parts.push(`dhash=${dHash}`);
+              return parts.join(" ");
+            } catch { return ""; }
+          };
+
+          const iconDescriptorFromDescendants = (el, maxSvgs = 2) => {
+            try {
+              const out = [];
+              const svgs = el.querySelectorAll?.("svg") || [];
+              for (const svg of svgs) {
+                const d = svgDescriptor(svg);
+                if (d) out.push(d);
+                if (out.length >= maxSvgs) break;
+              }
+              const imgs = el.querySelectorAll?.("img") || [];
+              for (const img of imgs) {
+                const alt = norm(img.getAttribute("alt"));
+                const title = norm(img.getAttribute("title"));
+                const cls = norm(img.getAttribute("class"));
+                const parts = [];
+                if (alt) parts.push(`alt=${alt}`);
+                if (title) parts.push(`title=${title}`);
+                if (cls) parts.push(`cls=${cls.split(/\s+/).slice(0,3).join(".")}`);
+                const d = parts.join(" ");
+                if (d) out.push("img:" + d);
+                if (out.length >= maxSvgs + 1) break;
+              }
+              return out.join(" | ");
+            } catch { return ""; }
+          };
+
+          const baseLabelTextOf = (el) => {
+            const chunks = [];
+            const own = directText(el) || (isControlLike(el) ? descendantText(el) : "");
+            if (own) chunks.push(own);
+
+            for (const k of ["aria-label","title","alt","placeholder"]) {
+              const v = norm(el.getAttribute?.(k));
+              if (v) chunks.push(`${k}=${v}`);
+            }
+
+            const cls = norm(el.getAttribute?.("class"));
+            if (cls) chunks.push(`class=${cls.split(/\s+/).slice(0,3).join(" ")}`);
+
+            const tag = (el.tagName || "").toLowerCase();
+            if (tag === "svg") {
+              const sd = svgDescriptor(el);
+              if (sd) chunks.push(sd);
+            }
+            return chunks.join(" | ");
+          };
+
+          const needsIconScan = (el, baseName) => {
+            if (!isControlLike(el)) return false;
+
+            const dt = directText(el);
+            const a = norm(el.getAttribute?.("aria-label"));
+            const t = norm(el.getAttribute?.("title"));
+            const alt = norm(el.getAttribute?.("alt"));
+            const ph = norm(el.getAttribute?.("placeholder"));
+            const hasStrong = !!(dt || a || t || alt || ph);
+            if (!hasStrong) return true;
+
+            // still scan when label is basically only a class stub / generic tokens
+            const s = norm(baseName);
+            if (!s) return true;
+            if (/^class=/.test(s) && s.length < 40) return true;
+            return false;
+          };
+
+          const labelTextOf = (el) => {
+            const base = baseLabelTextOf(el);
+            if (needsIconScan(el, base)) {
+              const desc = iconDescriptorFromDescendants(el);
+              return desc ? (base ? `${base} | ${desc}` : desc) : base;
+            }
+            return base;
+          };
+
+          const mergeIntoName = (entry, extra) => {
+            const v = norm(extra);
+            if (!v) return;
+            if (!entry.name) entry.name = v;
+            else if (!entry.name.includes(v)) entry.name = `${entry.name} | ${v}`;
+          };
+
+          const fastIntersectInfo = (el) => {
+            if (!el || el.nodeType !== 1) return { ok: false };
+            if (isSkippableTag(el)) return { ok: false };
+            const r = getCachedRect(el);
+            if (!r || r.width < 1 || r.height < 1) return { ok: false };
+            const ib = intersectViewport(r);
+            if (ib.width < 1 || ib.height < 1) return { ok: false };
+            return { ok: true, rect: r, ibox: ib };
+          };
+
+          const isRenderable = (el) => {
+            const bits = getStyleBits(el);
+            if (bits.display === "none" || bits.visibility === "hidden") return false;
+            if (parseFloat(bits.opacity || "1") === 0) return false;
+            return true;
+          };
+
+          const samplePointsAdaptive = (ibox, el) => {
+            if (ibox.width < 1 || ibox.height < 1) return [];
+            const a = ibox.width * ibox.height;
+            const inset = 2;
+            const cx = ibox.x + ibox.width / 2;
+            const cy = ibox.y + ibox.height / 2;
+
+            // dynamic sampling:
+            // - very large regions: center only
+            // - medium: center + 2 corners
+            // - small: 5 points
+            let mode = 5;
+            if (a >= 150 * 150) mode = 1;
+            else if (a >= 60 * 60) mode = 3;
+
+            // controls tend to be small/precise; keep stronger checks
+            if (isControlLike(el) && mode < 5) mode = 5;
+
+            const x1 = ibox.x + inset;
+            const y1 = ibox.y + inset;
+            const x2 = ibox.x + ibox.width - inset;
+            const y2 = ibox.y + ibox.height - inset;
+
+            const pts = [];
+            pts.push([cx, cy]);
+            if (mode >= 3) {
+              pts.push([x1, y1]);
+              pts.push([x2, y2]);
+            }
+            if (mode >= 5) {
+              pts.push([x2, y1]);
+              pts.push([x1, y2]);
+            }
+
+            const out = [];
+            for (const [x, y] of pts) {
+              out.push([clamp(x, 0, Math.max(0, vw - 1)), clamp(y, 0, Math.max(0, vh - 1))]);
+            }
+            return out;
+          };
+
+          const notFullyOccluded = (el, ibox) => {
+            const pts = samplePointsAdaptive(ibox, el);
+            if (!pts.length) return false;
+            for (const [x, y] of pts) {
+              const top = document.elementFromPoint(x, y);
+              if (!top) continue;
+              if (top === el || el.contains(top)) return true;
+            }
+            return false;
+          };
+
+          const visibleInfo = (el) => {
+            const fi = fastIntersectInfo(el);
+            if (!fi.ok) return { ok: false };
+
+            if (!isRenderable(el)) return { ok: false };
+
+            if (!notFullyOccluded(el, fi.ibox)) return { ok: false };
+
+            return { ok: true, rect: fi.rect, ibox: fi.ibox };
+          };
+
+          const childrenForTraversal = (el) => {
+            const out = [];
+            const pushKids = (parent) => {
+              try {
+                const kids = parent.children ? Array.from(parent.children) : [];
+                for (const c of kids) {
+                  if (isSkippableTag(c)) continue;
+
+                  const fi = fastIntersectInfo(c);
+                  if (fi.ok) { out.push(c); continue; }
+
+                  // "tunnel" cases: 0×0 wrappers that may contain visible grandchildren
+                  try {
+                    const bits = getStyleBits(c);
+                    const hasKids = (c.children && c.children.length) || (c.shadowRoot && c.shadowRoot.children && c.shadowRoot.children.length);
+                    if ((bits.display === "contents") || hasKids) out.push(c);
+                  } catch {
+                    // if we can't read style, but it has children, still worth tunneling
+                    if (c.children && c.children.length) out.push(c);
+                  }
+                }
+              } catch {}
+            };
+
+            pushKids(el);
+
+            // include shadow root children too
+            try {
+              const sr = el.shadowRoot;
+              if (sr) pushKids(sr);
+            } catch {}
+
+            return out;
+          };
+
+          const visibleChildrenStrict = (el) => {
+            const out = [];
+            try {
+              const kids = el.children ? Array.from(el.children) : [];
+              for (const c of kids) {
+                const v = visibleInfo(c);
+                if (v.ok) out.push(c);
+              }
+            } catch {}
+            try {
+              const sr = el.shadowRoot;
+              if (sr && sr.children) {
+                for (const c of Array.from(sr.children)) {
+                  const v = visibleInfo(c);
+                  if (v.ok) out.push(c);
+                }
+              }
+            } catch {}
+            return out;
+          };
+
+          const area = (b) => Math.max(0, b.width) * Math.max(0, b.height);
+          const intersectArea = (a, b) => {
+            const x1 = Math.max(a.x, b.x);
+            const y1 = Math.max(a.y, b.y);
+            const x2 = Math.min(a.x + a.width, b.x + b.width);
+            const y2 = Math.min(a.y + a.height, b.y + b.height);
+            const w = Math.max(0, x2 - x1);
+            const h = Math.max(0, y2 - y1);
+            return w * h;
+          };
+
+          const isUselessWrapper = (el, child) => {
+            const tag = (el.tagName || "").toLowerCase();
+            if (!WRAPPER_TAGS.has(tag)) return false;
+            if (isImportant(el)) return false;
+
+            if (el.getAttribute?.("id")) return false;
+            if (roleOf(el)) return false;
+            const tabindex = el.getAttribute?.("tabindex");
+            if (tabindex && tabindex !== "-1") return false;
+            if (el.hasAttribute?.("onclick")) return false;
+
+            const f1 = fastIntersectInfo(el);
+            const f2 = fastIntersectInfo(child);
+            if (!f1.ok || !f2.ok) return false;
+
+            const b1 = f1.ibox, b2 = f2.ibox;
+            const a1 = area(b1), a2 = area(b2);
+            if (a1 < 1 || a2 < 1) return false;
+            const ia = intersectArea(b1, b2);
+            const overlap = ia / Math.min(a1, a2);
+            return overlap >= 0.92;
+          };
+
+          const resolveRepresentative = (el) => {
+            let cur = el;
+            for (let steps = 0; steps < 50; steps++) {
+              const kids = childrenForTraversal(cur);
+              if (kids.length !== 1) break;
+              const child = kids[0];
+              if (isUselessWrapper(cur, child)) { cur = child; continue; }
+              break;
+            }
+            return cur;
+          };
+
+          const nearestVisibleControlAncestor = (el) => {
+            let cur = el?.parentElement || null;
+            while (cur && cur !== document.body) {
+              if (isControlLike(cur)) {
+                const v = visibleInfo(cur);
+                if (v.ok) return cur;
+              }
+              cur = cur.parentElement;
+            }
+            return null;
+          };
+
+          const shouldEmit = (el) => {
+            if (isControlLike(el)) return true;
+
+            // text-heavy, misused divs/spans:
+            // emit if it has meaningful direct text and isn't within a visible control
+            const dt = directText(el);
+            if (dt && dt.length >= 2) {
+              const ctrl = nearestVisibleControlAncestor(el);
+              if (!ctrl) return true;
+            }
+
+            if (isImportant(el)) {
+              const ctrl = nearestVisibleControlAncestor(el);
+              return !ctrl;
+            }
+            return false;
+          };
+
+          const raw = [];
+          const byId = new Map();
+          const idOf = new WeakMap();
+          let nextId = 0;
+
+          const addNode = (el, parentId, depth, ibox) => {
+            const id = nextId++;
+            idOf.set(el, id);
+            const entry = {
+              id,
+              el,
+              parent_id: parentId,
+              depth,
+              tag: (el.tagName || "").toLowerCase(),
+              role: roleOf(el),
+              name: labelTextOf(el),
+              bbox_viewport: {
+                x: Math.round(ibox.x),
+                y: Math.round(ibox.y),
+                width: Math.round(ibox.width),
+                height: Math.round(ibox.height),
+              },
+              bbox_page: {
+                x: Math.round(ibox.x + sx),
+                y: Math.round(ibox.y + sy),
+                width: Math.round(ibox.width),
+                height: Math.round(ibox.height),
+              },
+              attributes: attrsOf(el),
+              dom_path: domPath(el),
+            };
+            raw.push(entry);
+            byId.set(id, entry);
+            return entry;
+          };
+
+          const walk = (startEl, parentEntry, depth) => {
+            if (!startEl || startEl.nodeType !== 1) return;
+
+            // prune early by viewport intersection
+            const fi = fastIntersectInfo(startEl);
+            if (!fi.ok) {
+              // IMPORTANT: wrapper may be 0x0 (e.g. display:contents) but have visible descendants.
+              const kids = childrenForTraversal(startEl);
+              for (const c of kids) walk(c, parentEntry, depth);
+              return;
+            }
+
+            const rep = resolveRepresentative(startEl);
+            if (!rep || rep.nodeType !== 1) return;
+
+            const v = visibleInfo(rep);
+            if (!v.ok) {
+              // rep itself may fail occlusion / rect tests even though descendants are visible
+              const kids = childrenForTraversal(rep);
+              for (const c of kids) walk(c, parentEntry, depth);
+              return;
+            }
+
+            const ctrl = (!isControlLike(rep)) ? nearestVisibleControlAncestor(rep) : null;
+            if (ctrl) {
+              const cv = visibleInfo(ctrl);
+              if (cv.ok) {
+                let ctrlEntry = null;
+                const existingId = idOf.get(ctrl);
+                if (existingId !== undefined) ctrlEntry = byId.get(existingId) || null;
+                if (!ctrlEntry) ctrlEntry = addNode(ctrl, parentEntry ? parentEntry.id : null, depth, cv.ibox);
+
+                // merge rep's base label always; scan icons only when needed
+                const repBase = baseLabelTextOf(rep);
+                if (repBase) mergeIntoName(ctrlEntry, repBase);
+
+                if (needsIconScan(ctrl, baseLabelTextOf(ctrl)) || needsIconScan(rep, repBase)) {
+                  const repIcon = iconDescriptorFromDescendants(rep);
+                  if (repIcon) mergeIntoName(ctrlEntry, repIcon);
+                }
+
+                if (!ctrlEntry.attributes) ctrlEntry.attributes = {};
+                if (needsIconScan(ctrl, baseLabelTextOf(ctrl))) {
+                  const iconDesc = norm(iconDescriptorFromDescendants(ctrl));
+                  if (iconDesc) ctrlEntry.attributes["icon-desc"] = iconDesc;
+                }
+
+                const kids = childrenForTraversal(rep);
+                for (const c of kids) walk(c, ctrlEntry, ctrlEntry.depth + 1);
+                return;
+              }
+            }
+
+            let myEntry = parentEntry;
+            let nextDepth = depth;
+
+            if (shouldEmit(rep)) {
+              myEntry = addNode(rep, parentEntry ? parentEntry.id : null, depth, v.ibox);
+              nextDepth = depth + 1;
+
+              if (isControlLike(rep) && needsIconScan(rep, baseLabelTextOf(rep))) {
+                const iconDesc = norm(iconDescriptorFromDescendants(rep));
+                if (iconDesc) {
+                  mergeIntoName(myEntry, iconDesc);
+                  myEntry.attributes["icon-desc"] = iconDesc;
+                }
+              }
+            }
+
+            const kids = childrenForTraversal(rep);
+            for (const c of kids) walk(c, myEntry, nextDepth);
+          };
+
+          const root = document.body || document.documentElement;
+          if (!root) return [];
+
+          const topKids = childrenForTraversal(root);
+          for (const c of topKids) walk(c, null, 0);
+
+          if (!raw.length) return [];
+
+          // merge labels into controls; remove labels
+          const keptIds = new Set(raw.map(e => e.id));
+          const domToVisibleId = new WeakMap();
+          for (const e of raw) domToVisibleId.set(e.el, e.id);
+
+          const isLabelTag = (el) => (el?.tagName || "").toLowerCase() === "label";
+
+          const mergeLabelIntoControl = (controlId, labelId, text) => {
+            const c = byId.get(controlId);
+            const l = byId.get(labelId);
+            if (!c || !l) return;
+            if (!keptIds.has(controlId) || !keptIds.has(labelId)) return;
+            const t = norm(text || l.name || "");
+            if (!t) return;
+            mergeIntoName(c, t);
+          };
+
+          const labelRemoval = new Set();
+          const controls = raw.filter(e => keptIds.has(e.id) && e.el && isControlLike(e.el));
+
+          for (const c of controls) {
+            try {
+              const labs = c.el.labels ? Array.from(c.el.labels) : [];
+              for (const labEl of labs) {
+                const lid = domToVisibleId.get(labEl);
+                if (lid !== undefined && keptIds.has(lid)) {
+                  mergeLabelIntoControl(c.id, lid, norm(labEl.innerText || labEl.textContent || ""));
+                  labelRemoval.add(lid);
+                }
+              }
+            } catch {}
+          }
+
+          for (const c of controls) {
+            const v = c.el.getAttribute?.("aria-labelledby");
+            if (!v) continue;
+            const ids = v.split(/\s+/).map(s => s.trim()).filter(Boolean);
+            for (const domId of ids) {
+              const labEl = document.getElementById(domId);
+              if (!labEl) continue;
+              const lid = domToVisibleId.get(labEl);
+              if (lid !== undefined && keptIds.has(lid)) {
+                mergeLabelIntoControl(c.id, lid, norm(labEl.innerText || labEl.textContent || ""));
+                labelRemoval.add(lid);
+              }
+            }
+          }
+
+          for (const e of raw) {
+            if (!keptIds.has(e.id)) continue;
+            if (!e.el || !isLabelTag(e.el)) continue;
+            const f = e.el.getAttribute?.("for");
+            if (!f) continue;
+            const target = document.getElementById(f);
+            if (!target) continue;
+            const tid = domToVisibleId.get(target);
+            if (tid !== undefined && keptIds.has(tid)) {
+              mergeLabelIntoControl(tid, e.id, norm(e.el.innerText || e.el.textContent || ""));
+              labelRemoval.add(e.id);
+            }
+          }
+
+          for (const lid of labelRemoval) keptIds.delete(lid);
+
+          // recompute parent/depth
+          const findNearestKeptAncestorId = (el) => {
+            let cur = el;
+            while (cur) {
+              let p = cur.parentElement;
+              while (p) {
+                const pid = idOf.get(p);
+                if (pid !== undefined && keptIds.has(pid)) return pid;
+                p = p.parentElement;
+              }
+              const rn = cur.getRootNode?.();
+              if (rn && rn.host) { cur = rn.host; continue; }
+              break;
+            }
+            return null;
+          };
+
+          for (const e of raw) {
+            if (!keptIds.has(e.id)) continue;
+            e.parent_id = findNearestKeptAncestorId(e.el);
+          }
+
+          const depthMemo = new Map();
+          const depthOf = (id) => {
+            if (depthMemo.has(id)) return depthMemo.get(id);
+            const e = byId.get(id);
+            if (!e || !keptIds.has(id)) return 0;
+            const p = e.parent_id;
+            const d = p === null ? 0 : depthOf(p) + 1;
+            depthMemo.set(id, d);
+            return d;
+          };
+
+          for (const e of raw) {
+            if (!keptIds.has(e.id)) continue;
+            e.depth = depthOf(e.id);
+          }
+
+          const kept = raw.filter(e => keptIds.has(e.id));
+          kept.sort((a,b) => {
+            const ay = a.bbox_viewport?.y ?? 0;
+            const by = b.bbox_viewport?.y ?? 0;
+            if (ay !== by) return ay - by;
+            const ax = a.bbox_viewport?.x ?? 0;
+            const bx = b.bbox_viewport?.x ?? 0;
+            if (ax !== bx) return ax - bx;
+            const aa = (a.bbox_viewport?.width ?? 0) * (a.bbox_viewport?.height ?? 0);
+            const ba = (b.bbox_viewport?.width ?? 0) * (b.bbox_viewport?.height ?? 0);
+            return aa - ba;
+          });
+
+          return kept.map(e => ({
+            id: e.id,
+            parent_id: e.parent_id,
+            depth: e.depth,
+            tag: e.tag,
+            role: e.role,
+            name: e.name || "",
+            bbox_viewport: e.bbox_viewport,
+            bbox_page: e.bbox_page,
+            attributes: e.attributes,
+            dom_path: e.dom_path,
+          }));
+        }
