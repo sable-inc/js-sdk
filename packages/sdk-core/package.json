@@ -1,11 +1,12 @@
 {
   "name": "@sable-ai/sdk-core",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Sable SDK core — headless runtime (voice + vision + agent RPC) that runs in the user's browser.",
   "license": "MIT",
   "type": "module",
   "sideEffects": [
     "./dist/sable.iife.js",
+    "./dist/sable-core.mjs",
     "./dist/esm/index.js"
   ],
   "main": "./dist/esm/index.js",
@@ -33,8 +34,9 @@
   },
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun run build:iife && bun run build:esm && bun run build:types",
-    "build:iife": "bun build src/index.ts --outfile dist/sable.iife.js --format=iife --minify",
+    "build": "bun run clean && bun run build:loader && bun run build:core && bun run build:esm && bun run build:types",
+    "build:loader": "bun build src/loader.ts --outfile dist/sable.iife.js --format=iife --minify --target=browser",
+    "build:core": "bun build src/index.ts --outfile dist/sable-core.mjs --format=esm --minify --target=browser",
     "build:esm": "bun build src/index.ts --outdir dist/esm --format=esm --target=browser --external livekit-client",
     "build:types": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",

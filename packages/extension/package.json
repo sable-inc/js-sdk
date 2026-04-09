@@ -9,7 +9,7 @@
     "build:clean": "rm -rf dist && mkdir -p dist",
     "build:scripts": "bun build src/background.ts src/popup.ts --outdir dist --target=browser",
     "build:assets": "cp manifest.json dist/manifest.json && cp src/popup.html dist/popup.html && cp src/rules.json dist/rules.json",
-    "build:sdk-copy": "cp ../sdk-core/dist/sable.iife.js dist/sable.iife.js",
+    "build:sdk-copy": "cp ../sdk-core/dist/sable.iife.js dist/sable.iife.js && cp ../sdk-core/dist/sable-core.mjs dist/sable-core.mjs",
     "package": "bun run build && bun run zip",
     "zip": "cd dist && zip -r ../sable-extension-$npm_package_version.zip . -x '*.DS_Store' && cd .. && echo '→ sable-extension-'$npm_package_version'.zip'"
   },

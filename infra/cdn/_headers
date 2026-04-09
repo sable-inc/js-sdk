@@ -2,19 +2,29 @@
 #
 # Docs: https://developers.cloudflare.com/pages/configuration/headers/
 #
-# We serve one file (sable.js) under three path conventions:
+# We serve two files per version pin:
 #
-#   /v0.1.3/sable.js   — exact-pinned, IMMUTABLE cache. Safe to cache for a
-#                         year because publishing a new version creates a new
-#                         path, not a new file at the same path.
+#   sable.js         — the 1 KB IIFE loader stub (Stripe.js-style). Tiny,
+#                       runs on page load, lazy-imports sable-core.mjs on
+#                       the first Sable.start() call.
+#   sable-core.mjs   — the full SDK (~150 KB gzipped, livekit inlined).
+#                       Loaded on demand via dynamic import from the same
+#                       path as the loader.
 #
-#   /v1/sable.js        — latest 0.x MINOR pin. Safe to cache for ~1 hour —
-#                         short enough to propagate a patch release quickly,
+# Both files live under three path conventions:
+#
+#   /v0.1.4/{sable.js,sable-core.mjs}   — exact-pinned, IMMUTABLE cache.
+#                         Safe to cache for a year because publishing a new
+#                         version creates a new path, not a new file at the
+#                         same path.
+#
+#   /v1/{sable.js,sable-core.mjs}        — latest 0.x MINOR pin. 1 hour cache
+#                         — short enough to propagate a patch release quickly,
 #                         long enough to absorb traffic spikes. No `immutable`.
 #
-#   /latest/sable.js    — always newest. 5-minute edge cache. Strongly
-#                         discouraged for production (docs warn) but useful
-#                         for demos and smoke tests.
+#   /latest/{sable.js,sable-core.mjs}    — always newest. 5-minute edge cache.
+#                         Strongly discouraged for production (docs warn) but
+#                         useful for demos and smoke tests.
 #
 # CORS is permissive (`*`) because the SDK is explicitly script-tag-friendly:
 # customers embed it on any origin and the auth boundary is the publishable
@@ -29,9 +39,15 @@
 
 /v0.*/sable.js
   Cache-Control: public, max-age=31536000, immutable
+/v0.*/sable-core.mjs
+  Cache-Control: public, max-age=31536000, immutable
 
 /v1/sable.js
   Cache-Control: public, max-age=3600, s-maxage=3600
+/v1/sable-core.mjs
+  Cache-Control: public, max-age=3600, s-maxage=3600
 
 /latest/sable.js
+  Cache-Control: public, max-age=300, s-maxage=300
+/latest/sable-core.mjs
   Cache-Control: public, max-age=300, s-maxage=300

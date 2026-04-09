@@ -3,14 +3,19 @@
 #
 # Usage: infra/cdn/stage.sh <version>
 #
-# Expects packages/sdk-core/dist/sable.iife.js to exist (run `bun run build`
-# first). Produces infra/cdn/public/ laid out as described in the README:
+# Expects packages/sdk-core/dist/sable.iife.js and sable-core.mjs to exist
+# (run `bun run build` first). Produces infra/cdn/public/ laid out as
+# described in the README:
 #
 #   infra/cdn/public/
 #   ├── _headers
-#   ├── v<version>/sable.js
-#   ├── v<major>/sable.js        # minor-pinned (v1 for 0.x, v2 for 1.x, ...)
-#   └── latest/sable.js
+#   ├── v<version>/{sable.js,sable-core.mjs}
+#   ├── v<major>/{sable.js,sable-core.mjs}   # minor-pinned (v1 for 0.x, ...)
+#   └── latest/{sable.js,sable-core.mjs}
+#
+# The loader (sable.js) resolves its core bundle via
+# `new URL("./sable-core.mjs", document.currentScript.src)`, so the two
+# files MUST live side-by-side under every pin.
 #
 # The output directory is clobbered on each run — this script is meant to be
 # called fresh from CI, not to manage persistent state.
@@ -37,23 +42,27 @@ else
 fi
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-SRC="$ROOT/packages/sdk-core/dist/sable.iife.js"
+LOADER="$ROOT/packages/sdk-core/dist/sable.iife.js"
+CORE="$ROOT/packages/sdk-core/dist/sable-core.mjs"
 OUT="$ROOT/infra/cdn/public"
 
-if [ ! -f "$SRC" ]; then
-  echo "error: $SRC not found — run 'bun run build' in packages/sdk-core first" >&2
-  exit 1
-fi
+for f in "$LOADER" "$CORE"; do
+  if [ ! -f "$f" ]; then
+    echo "error: $f not found — run 'bun run build' in packages/sdk-core first" >&2
+    exit 1
+  fi
+done
 
 rm -rf "$OUT"
 mkdir -p "$OUT/v$VERSION" "$OUT/$PIN" "$OUT/latest"
 
-cp "$SRC" "$OUT/v$VERSION/sable.js"
-cp "$SRC" "$OUT/$PIN/sable.js"
-cp "$SRC" "$OUT/latest/sable.js"
+for dir in "v$VERSION" "$PIN" "latest"; do
+  cp "$LOADER" "$OUT/$dir/sable.js"
+  cp "$CORE"   "$OUT/$dir/sable-core.mjs"
+done
 cp "$ROOT/infra/cdn/_headers" "$OUT/_headers"
 
 echo "staged sdk-core v$VERSION → $OUT"
-echo "  /v$VERSION/sable.js"
-echo "  /$PIN/sable.js (minor pin)"
-echo "  /latest/sable.js"
+for dir in "v$VERSION" "$PIN" "latest"; do
+  echo "  /$dir/sable.js + sable-core.mjs"
+done

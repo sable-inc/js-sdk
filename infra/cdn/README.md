@@ -8,13 +8,24 @@ package don't touch this.
 
 | Path | Pin | Cache | Use case |
 | --- | --- | --- | --- |
-| `https://sdk.withsable.com/v0.1.3/sable.js` | exact version | 1 year, immutable | **Recommended for production.** Upgrades are opt-in, bytes never change under a URL. |
+| `https://sdk.withsable.com/v0.1.4/sable.js` | exact version | 1 year, immutable | **Recommended for production.** Upgrades are opt-in, bytes never change under a URL. |
 | `https://sdk.withsable.com/v1/sable.js` | latest `0.x` | 1 hour | Accepts patch releases automatically; breaks on a hypothetical `1.0.0`. |
 | `https://sdk.withsable.com/latest/sable.js` | always newest | 5 minutes | Demos and smoke tests only. Do NOT use in production — you're opted into every release the day it ships. |
 
-All paths serve the same minified IIFE bundle built from
-`packages/sdk-core/src/index.ts` by `bun run build`. The only difference is
-which version the path points at and how long the edge cache holds it.
+Each path serves a pair of files built by `bun run build` in
+`packages/sdk-core`:
+
+- **`sable.js`** (~530 B gzipped) — the Stripe.js-style IIFE loader stub
+  compiled from `src/loader.ts`. Captures its own script URL, installs
+  `window.Sable`, and lazy-imports the core on first `Sable.start()`.
+- **`sable-core.mjs`** (~150 KB gzipped) — the full SDK (livekit-client
+  inlined) compiled as ESM from `src/index.ts`. Fetched on demand via
+  dynamic import from the same path as the loader.
+
+Both files MUST live under the same pin directory because the loader
+resolves the core via `new URL("./sable-core.mjs", scriptSrc)` — loading
+`/v0.1.4/sable.js` always pulls `/v0.1.4/sable-core.mjs`. Version cohesion
+is automatic.
 
 ## Architecture
 
@@ -25,13 +36,15 @@ which version the path points at and how long the edge cache holds it.
 - **Layout staged on disk before deploy:**
   ```
   infra/cdn/public/
-  ├── _headers                  # copied from infra/cdn/_headers
-  ├── v0.1.3/sable.js          # the built IIFE for the tag being released
-  ├── v1/sable.js              # same bytes, minor-pinned
-  └── latest/sable.js          # same bytes, always-newest
+  ├── _headers                      # copied from infra/cdn/_headers
+  ├── v0.1.4/
+  │   ├── sable.js                  # the loader for the tag being released
+  │   └── sable-core.mjs            # full SDK ESM for dynamic import
+  ├── v1/{sable.js,sable-core.mjs}  # same bytes, minor-pinned
+  └── latest/{sable.js,sable-core.mjs} # same bytes, always-newest
   ```
 - Previous versions are preserved because Cloudflare Pages does incremental
-  deploys — the `v0.0.2/` directory stays in place when `v0.1.3/` is added.
+  deploys — the `v0.0.2/` directory stays in place when `v0.1.4/` is added.
 
 ## CORS
 
@@ -72,7 +85,7 @@ Run these steps before the first release tag pushes:
 After the workflow finishes, cache-bust and sanity-check the three pins:
 
 ```sh
-curl -sI "https://sdk.withsable.com/v0.1.3/sable.js?t=$RANDOM" | head
+curl -sI "https://sdk.withsable.com/v0.1.4/sable.js?t=$RANDOM" | head
 curl -sI "https://sdk.withsable.com/v1/sable.js?t=$RANDOM" | head
 curl -sI "https://sdk.withsable.com/latest/sable.js?t=$RANDOM" | head
 ```

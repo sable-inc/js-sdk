@@ -14,7 +14,10 @@ bun run --filter @sable-ai/extension build
 ```
 
 This produces `packages/extension/dist/` with `manifest.json`, `background.js`,
-`popup.html`, `popup.js`, and `sable.iife.js`.
+`popup.html`, `popup.js`, `sable.iife.js` (the ~1 KB loader), and
+`sable-core.mjs` (the full SDK bundle, ~150 KB gzipped). Both SDK files are
+declared in `web_accessible_resources` so the loader can dynamic-import
+the core from its own `chrome-extension://<id>/` origin.
 
 ## Load in Chrome
 

@@ -29,7 +29,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["sable.iife.js"],
+      "resources": ["sable.iife.js", "sable-core.mjs"],
       "matches": ["<all_urls>"]
     }
   ]
