@@ -1,6 +1,6 @@
 {
   "name": "@sable-ai/sdk-core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Sable SDK core — headless runtime (voice + vision + agent RPC) that runs in the user's browser.",
   "license": "MIT",
   "type": "module",

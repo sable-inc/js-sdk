@@ -4,7 +4,7 @@
 #
 # We serve one file (sable.js) under three path conventions:
 #
-#   /v0.1.0/sable.js   — exact-pinned, IMMUTABLE cache. Safe to cache for a
+#   /v0.1.1/sable.js   — exact-pinned, IMMUTABLE cache. Safe to cache for a
 #                         year because publishing a new version creates a new
 #                         path, not a new file at the same path.
 #
