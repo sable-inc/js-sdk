@@ -8,7 +8,7 @@ package don't touch this.
 
 | Path | Pin | Cache | Use case |
 | --- | --- | --- | --- |
-| `https://sdk.withsable.com/v0.1.1/sable.js` | exact version | 1 year, immutable | **Recommended for production.** Upgrades are opt-in, bytes never change under a URL. |
+| `https://sdk.withsable.com/v0.1.2/sable.js` | exact version | 1 year, immutable | **Recommended for production.** Upgrades are opt-in, bytes never change under a URL. |
 | `https://sdk.withsable.com/v1/sable.js` | latest `0.x` | 1 hour | Accepts patch releases automatically; breaks on a hypothetical `1.0.0`. |
 | `https://sdk.withsable.com/latest/sable.js` | always newest | 5 minutes | Demos and smoke tests only. Do NOT use in production — you're opted into every release the day it ships. |
 
@@ -26,12 +26,12 @@ which version the path points at and how long the edge cache holds it.
   ```
   infra/cdn/public/
   ├── _headers                  # copied from infra/cdn/_headers
-  ├── v0.1.1/sable.js          # the built IIFE for the tag being released
+  ├── v0.1.2/sable.js          # the built IIFE for the tag being released
   ├── v1/sable.js              # same bytes, minor-pinned
   └── latest/sable.js          # same bytes, always-newest
   ```
 - Previous versions are preserved because Cloudflare Pages does incremental
-  deploys — the `v0.0.2/` directory stays in place when `v0.1.1/` is added.
+  deploys — the `v0.0.2/` directory stays in place when `v0.1.2/` is added.
 
 ## CORS
 
@@ -72,7 +72,7 @@ Run these steps before the first release tag pushes:
 After the workflow finishes, cache-bust and sanity-check the three pins:
 
 ```sh
-curl -sI "https://sdk.withsable.com/v0.1.1/sable.js?t=$RANDOM" | head
+curl -sI "https://sdk.withsable.com/v0.1.2/sable.js?t=$RANDOM" | head
 curl -sI "https://sdk.withsable.com/v1/sable.js?t=$RANDOM" | head
 curl -sI "https://sdk.withsable.com/latest/sable.js?t=$RANDOM" | head
 ```

@@ -124,9 +124,16 @@ jobs:
           VERSION="${GITHUB_REF_NAME#sdk-core-v}"
           ./infra/cdn/stage.sh "$VERSION"
 
+      # wrangler-action auto-detects the workspace package manager and picks
+      # bun when it sees `bun.lock` at the repo root. Without bun on PATH
+      # the action fails immediately with "Unable to locate executable file:
+      # bun". We force npm here instead — wrangler itself doesn't need any
+      # workspace deps (it's a self-contained CLI) and npm is always
+      # available on GitHub runners.
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          packageManager: npm
           command: pages deploy infra/cdn/public --project-name=sable-sdk-cdn --branch=main
