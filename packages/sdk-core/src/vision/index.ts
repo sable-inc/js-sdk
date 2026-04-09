@@ -26,7 +26,7 @@ export type { LiveKitPublishLib, PublishCapableRoom } from "./publisher";
 const DEFAULT_FRAME_SOURCE: FrameSource = {
   type: "wireframe",
   rate: 2,
-  features: { includeImages: false },
+  features: { includeImages: true },
 };
 
 export interface StartVisionArgs {

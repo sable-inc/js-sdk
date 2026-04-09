@@ -19,7 +19,7 @@ export interface WireframeFrameSource {
   features?: {
     /**
      * Include rendered images in the wireframe (instead of placeholder boxes).
-     * Slightly higher CPU + bandwidth. Default: false.
+     * Slightly higher CPU + bandwidth. Default: true.
      */
     includeImages?: boolean;
   };
@@ -51,7 +51,7 @@ export interface VisionOptions {
   enabled?: boolean;
   /**
    * Where video frames come from. Defaults to the built-in wireframe renderer
-   * at 2 fps with images disabled.
+   * at 2 fps with images enabled.
    */
   frameSource?: FrameSource;
 }

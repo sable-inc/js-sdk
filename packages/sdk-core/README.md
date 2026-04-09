@@ -86,8 +86,8 @@ to your site is effectively zero.
 On the first `Sable.start()` call, the loader dynamic-imports the full
 SDK (`sable-core.mjs`, ~150 KB gzipped with livekit-client inlined) from
 the **same CDN path** it was served from — so loading
-`https://sdk.withsable.com/v0.1.4/sable.js` always pulls
-`https://sdk.withsable.com/v0.1.4/sable-core.mjs`, and version cohesion
+`https://sdk.withsable.com/v0.1.5/sable.js` always pulls
+`https://sdk.withsable.com/v0.1.5/sable-core.mjs`, and version cohesion
 is automatic. Pages that never start a session pay only the loader cost;
 pages that do start a session pay the core download exactly once, cached
 aggressively for the lifetime of the version pin.
@@ -97,12 +97,12 @@ Pages), cached at the edge, and versioned. Three path conventions:
 
 | URL | Cache | Use case |
 | --- | --- | --- |
-| `https://sdk.withsable.com/v0.1.4/sable.js` | 1 year, immutable | **Recommended for production** — exact version pin |
+| `https://sdk.withsable.com/v0.1.5/sable.js` | 1 year, immutable | **Recommended for production** — exact version pin |
 | `https://sdk.withsable.com/v1/sable.js` | 1 hour | Latest `0.x` — accepts patch releases automatically |
 | `https://sdk.withsable.com/latest/sable.js` | 5 minutes | Demos and smoke tests only |
 
 `v1` is a stable major line — the API won't change without a major
-bump. Pin to an exact version (`v0.1.4`) if you want bit-for-bit
+bump. Pin to an exact version (`v0.1.5`) if you want bit-for-bit
 reproducibility.
 
 ### Option B: npm package (React, Vue, Svelte, Next, etc.)
@@ -210,7 +210,7 @@ All events are fire-and-forget; the SDK does not care whether you subscribe.
 | `vision.enabled` | `boolean` | `false` | Whether to publish a video track of the page to the agent. |
 | `vision.frameSource` | `FrameSource` | `{ type: "wireframe" }` | Where frames come from. Either the built-in wireframe renderer or a custom function (see below). |
 | `vision.frameSource.rate` | `number` | `2` | Capture rate in frames per second. Applies to both `wireframe` and `fn`. Higher = more responsive agent vision, more bandwidth. |
-| `vision.frameSource.features.includeImages` | `boolean` | `false` | (Wireframe only.) Include rendered images, not just layout boxes. Slightly higher bandwidth. |
+| `vision.frameSource.features.includeImages` | `boolean` | `true` | (Wireframe only.) Include rendered images, not just layout boxes. Set to `false` to ship only layout boxes (lower bandwidth). |
 | `vision.frameSource.captureFn` | `() => HTMLCanvasElement \| ImageBitmap` | — | (Required when `type: "fn"`.) Called at `rate` Hz. Useful for feeding the agent a custom canvas (e.g. a 3D scene, a video element, a WebGL surface). |
 | `runtime` | `Record<string, Function>` | `{}` | Implementations for UI-stub methods the agent can call, plus any additional methods you want to expose as agent tools. |
 | `context` | `Record<string, unknown>` | `{}` | Forwarded verbatim to the agent at session start. Appears in the agent's initial prompt. |
@@ -230,7 +230,7 @@ All events are fire-and-forget; the SDK does not care whether you subscribe.
 ## FAQ
 
 **Do I need a backend integration?**
-No. The SDK talks directly to `api.withsable.com` from the page. There's no
+No. The SDK talks directly to the Sable API from the page. There's no
 webhook to install, no server-to-server auth, no token exchange you have to
 implement. The public key + allowed-domains check is the entire trust model.
 
@@ -294,8 +294,11 @@ from (`sdk.withsable.com` by default), so your CSP needs to allow that
 origin in `script-src` — typically `script-src 'self' https://sdk.withsable.com`
 if you load from the public CDN. No third-party origins are contacted
 at runtime beyond `sdk.withsable.com` (for the core bundle) and
-`api.withsable.com` (for the session). If you self-host both files
-under your own origin, `'self'` alone is sufficient.
+`sable-api-gateway-9dfmhij9.wl.gateway.dev` (for the session — plus
+the LiveKit WebSocket origin returned by the session endpoint). If
+you self-host `sable.js` + `sable-core.mjs` under your own origin,
+`'self'` covers the script side; the API + LiveKit origins still
+need to be in `connect-src`.
 
 ---
 
