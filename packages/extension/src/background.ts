@@ -1,21 +1,46 @@
 /// <reference types="chrome" />
 
 /**
- * Background service worker for @sable-ai/extension (dev build).
+ * Background service worker for @sable-ai/extension.
  *
- * Handles two message types from the popup:
+ * Two build modes, selected at bun build time via __SABLE_BUILD__
+ * (see package.json):
  *
- *   { type: "start", agentId, apiUrl } — idempotently inject the SDK
- *     script tag into the active tab (main world via web_accessible_resources),
- *     wait for `window.Sable` to appear, then call
- *     `window.Sable.start({publicKey, apiUrl, vision})` in the main world.
+ *   local — loader comes from chrome.runtime.getURL("sable.iife.js"),
+ *     which is the bundled 533 B loader stub copied from
+ *     ../sdk-core/dist during build.
  *
- *   { type: "stop" } — call `window.Sable.stop()` in the main world if the
- *     SDK is loaded. No-op otherwise.
+ *   prod  — loader comes from https://sdk.withsable.com/v1/sable.js
+ *     (the CDN). Nothing SDK-related is bundled into the extension.
+ *
+ * Both modes share the same popup and message flow. The popup exposes:
+ *
+ *   { type: "inject" } — put the loader on the page and stop. The user
+ *     can now call window.Sable.start(...) from devtools manually.
+ *
+ *   { type: "start", agentId, apiUrl } — inject the loader if not
+ *     already there, wait for window.Sable, then call
+ *     window.Sable.start({ publicKey: agentId, apiUrl, vision }).
+ *
+ *   { type: "stop" } — call window.Sable.stop() if the SDK is present.
  *
  * All "touch window.Sable" calls MUST pass world: "MAIN" to executeScript,
  * otherwise they run in the isolated world where Sable is undefined.
  */
+
+declare const __SABLE_BUILD__: "local" | "prod";
+
+const CDN_LOADER_URL = "https://sdk.withsable.com/v1/sable.js";
+
+function loaderUrl(): string {
+  return __SABLE_BUILD__ === "prod"
+    ? CDN_LOADER_URL
+    : chrome.runtime.getURL("sable.iife.js");
+}
+
+interface InjectMessage {
+  type: "inject";
+}
 
 interface StartMessage {
   type: "start";
@@ -27,7 +52,7 @@ interface StopMessage {
   type: "stop";
 }
 
-type IncomingMessage = StartMessage | StopMessage;
+type IncomingMessage = InjectMessage | StartMessage | StopMessage;
 
 interface OkResponse {
   ok: true;
@@ -47,7 +72,7 @@ async function getActiveTabId(): Promise<number> {
 }
 
 async function injectSdkTag(tabId: number): Promise<void> {
-  const sdkUrl = chrome.runtime.getURL("sable.iife.js");
+  const sdkUrl = loaderUrl();
   await chrome.scripting.executeScript({
     target: { tabId },
     world: "MAIN",
@@ -56,6 +81,7 @@ async function injectSdkTag(tabId: number): Promise<void> {
       if (w.Sable) return; // already injected, skip
       const s = document.createElement("script");
       s.src = url;
+      s.async = true;
       (document.head || document.documentElement).appendChild(s);
     },
     args: [sdkUrl],
@@ -104,7 +130,14 @@ async function callStart(
               start(opts: {
                 publicKey: string;
                 apiUrl: string;
-                vision?: { enabled: boolean };
+                vision?: {
+                  enabled: boolean;
+                  frameSource?: {
+                    type: "wireframe";
+                    rate?: number;
+                    features?: { includeImages?: boolean };
+                  };
+                };
               }): Promise<void>;
             };
           }
@@ -113,7 +146,19 @@ async function callStart(
           apiUrl,
           // Extension injection is always agent-drives-the-user-browser,
           // so vision is on by default — the agent needs to see the page.
-          vision: { enabled: true },
+          // Images in the wireframe are also on: the extension explicitly
+          // overrides the SDK default for now because the CDN-hosted SDK
+          // (sdk.withsable.com) still defaults to includeImages=false. Once
+          // the next sdk-core tag ships with includeImages=true as the
+          // default, this explicit frameSource can be dropped.
+          vision: {
+            enabled: true,
+            frameSource: {
+              type: "wireframe",
+              rate: 2,
+              features: { includeImages: true },
+            },
+          },
         });
         return { ok: true as const };
       } catch (e) {
@@ -159,6 +204,12 @@ async function callStop(tabId: number): Promise<void> {
   if (!r.ok) throw new Error(r.error);
 }
 
+async function handleInject(): Promise<void> {
+  const tabId = await getActiveTabId();
+  await injectSdkTag(tabId);
+  await waitForSable(tabId);
+}
+
 async function handleStart(msg: StartMessage): Promise<void> {
   const tabId = await getActiveTabId();
   await injectSdkTag(tabId);
@@ -173,8 +224,8 @@ async function handleStop(): Promise<void> {
 
 chrome.runtime.onMessage.addListener(
   (msg: IncomingMessage, _sender, sendResponse: (r: BgResponse) => void) => {
-    if (msg?.type === "start") {
-      handleStart(msg).then(
+    const respond = (p: Promise<void>) => {
+      p.then(
         () => sendResponse({ ok: true }),
         (err: unknown) =>
           sendResponse({
@@ -183,18 +234,11 @@ chrome.runtime.onMessage.addListener(
           }),
       );
       return true; // async response
-    }
-    if (msg?.type === "stop") {
-      handleStop().then(
-        () => sendResponse({ ok: true }),
-        (err: unknown) =>
-          sendResponse({
-            ok: false,
-            error: err instanceof Error ? err.message : String(err),
-          }),
-      );
-      return true; // async response
-    }
+    };
+
+    if (msg?.type === "inject") return respond(handleInject());
+    if (msg?.type === "start") return respond(handleStart(msg));
+    if (msg?.type === "stop") return respond(handleStop());
     return false;
   },
 );

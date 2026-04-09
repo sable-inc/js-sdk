@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Sable",
+  "version": "0.0.1",
+  "description": "Injects the Sable SDK loader into the current tab. Start a session from the popup form or directly from devtools.",
+  "permissions": [
+    "scripting",
+    "activeTab",
+    "storage",
+    "declarativeNetRequest",
+    "declarativeNetRequestWithHostAccess"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "strip_csp",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Sable"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}

@@ -5,13 +5,19 @@
   "description": "Sable Chrome MV3 extension (development build).",
   "type": "module",
   "scripts": {
-    "build": "bun run build:clean && bun run build:scripts && bun run build:assets && bun run build:sdk-copy",
-    "build:clean": "rm -rf dist && mkdir -p dist",
-    "build:scripts": "bun build src/background.ts src/popup.ts --outdir dist --target=browser",
-    "build:assets": "cp manifest.json dist/manifest.json && cp src/popup.html dist/popup.html && cp src/rules.json dist/rules.json",
-    "build:sdk-copy": "cp ../sdk-core/dist/sable.iife.js dist/sable.iife.js && cp ../sdk-core/dist/sable-core.mjs dist/sable-core.mjs",
-    "package": "bun run build && bun run zip",
-    "zip": "cd dist && zip -r ../sable-extension-$npm_package_version.zip . -x '*.DS_Store' && cd .. && echo '→ sable-extension-'$npm_package_version'.zip'"
+    "build": "bun run build:local",
+    "build:local": "bun run _clean && bun run _scripts:local && bun run _assets:local && bun run _sdk:copy",
+    "build:prod": "bun run _clean && bun run _scripts:prod && bun run _assets:prod",
+    "_clean": "rm -rf dist && mkdir -p dist",
+    "_scripts:local": "bun build src/background.ts src/popup.ts --outdir dist --target=browser --define __SABLE_BUILD__='\"local\"'",
+    "_scripts:prod": "bun build src/background.ts src/popup.ts --outdir dist --target=browser --define __SABLE_BUILD__='\"prod\"'",
+    "_assets:local": "cp manifest.local.json dist/manifest.json && cp src/popup.html dist/popup.html && cp src/rules.json dist/rules.json",
+    "_assets:prod": "cp manifest.prod.json dist/manifest.json && cp src/popup.html dist/popup.html && cp src/rules.json dist/rules.json",
+    "_sdk:copy": "cp ../sdk-core/dist/sable.iife.js dist/sable.iife.js && cp ../sdk-core/dist/sable-core.mjs dist/sable-core.mjs",
+    "package": "bun run build:local && bun run zip",
+    "package:prod": "bun run build:prod && bun run zip:prod",
+    "zip": "cd dist && zip -r ../sable-extension-$npm_package_version.zip . -x '*.DS_Store' && cd .. && echo '→ sable-extension-'$npm_package_version'.zip'",
+    "zip:prod": "cd dist && zip -r ../sable-extension-prod-$npm_package_version.zip . -x '*.DS_Store' && cd .. && echo '→ sable-extension-prod-'$npm_package_version'.zip'"
   },
   "dependencies": {
     "@sable-ai/sdk-core": "workspace:*"
