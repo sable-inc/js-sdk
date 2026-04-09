@@ -62,13 +62,6 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
-      # npm trusted publishing (OIDC) requires npm >= 11.5.1, which is
-      # newer than what ships bundled with Node 22. Upgrade before publish
-      # so the CLI negotiates an OIDC token from the `id-token: write`
-      # permission instead of falling back to NODE_AUTH_TOKEN.
-      - name: Upgrade npm (for OIDC trusted publishing)
-        run: npm install -g npm@latest
-
       - name: Install workspace deps
         working-directory: .
         run: bun install --frozen-lockfile
@@ -93,12 +86,15 @@ jobs:
         run: bun run build
 
       # `--provenance` attaches the OIDC attestation. Requires `id-token: write`
-      # and a trusted-publisher configured on npm (or an NPM_TOKEN with
-      # automation scope as fallback).
+      # and a trusted-publisher configured on npm.
+      #
+      # We invoke the latest npm via `npx` rather than the CLI bundled with
+      # Node, because npm trusted publishing (OIDC) is GA only from npm
+      # 11.5.1 onward (July 2025), which is newer than what ships with any
+      # current setup-node version. `npm install -g npm@latest` is broken
+      # mid-self-upgrade on Node 22, so npx is the reliable path.
       - name: Publish to npm
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npx -y npm@latest publish --provenance --access public
 
       - name: Upload dist artifact
         uses: actions/upload-artifact@v4
